@@ -1,0 +1,30 @@
+{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "production": [
+      "default",
+      "!{projectRoot}/.eslintrc.json",
+      "!{projectRoot}/eslint.config.mjs",
+      "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)",
+      "!{projectRoot}/tsconfig.spec.json"
+    ],
+    "sharedGlobals": []
+  },
+  "plugins": [
+    "@nx/js/typescript",
+    "@nx/eslint/plugin",
+    {
+      "plugin": "@nxlv/python",
+      "options": { "packageManager": "uv" }
+    }
+  ],
+  "targetDefaults": {
+    "build": { "dependsOn": ["install", "^build"] },
+    "lint": { "dependsOn": ["build"] },
+    "test": { "dependsOn": ["build"] }
+  },
+  "defaultBase": "main",
+  "neverConnectToCloud": true,
+  "analytics": false
+}

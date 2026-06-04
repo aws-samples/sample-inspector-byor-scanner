@@ -1,0 +1,21 @@
+node_modules/
+dist/
+build/
+.nx/cache
+.nx/workspace-data
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# CDK
+cdk.out/
+*.swp
+
+# Editors
+.vscode/
+.idea/
+.DS_Store
