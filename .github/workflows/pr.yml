@@ -1,0 +1,61 @@
+name: PR
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: npx nx run-many --target=lint --output-style=stream
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: npx nx run-many --target=test --output-style=stream --coverage
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+
+  cdk-nag:
+    name: CDK Nag
+    # TODO: Remove `if: false` once packages/cdk lands. The job should
+    # `cdk synth` with cdk-nag aspects applied and fail on any
+    # AwsSolutions / HIPAA / NIST findings that haven't been suppressed.
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: npx nx run-many --target=synth --output-style=stream
+
+  integration-tests:
+    name: Integration tests
+    # TODO: Remove this `if: false` once integration tests are wired up
+    # (e.g. when packages/canary lands). The check will then run for real
+    # on every PR. Until then it shows as "Skipped" so maintainers don't
+    # mistake an unimplemented stage for passing tests.
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: npx nx run-many --target=integ --output-style=stream

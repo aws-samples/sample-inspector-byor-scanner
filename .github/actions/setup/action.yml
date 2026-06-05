@@ -1,0 +1,28 @@
+name: Setup workspace
+description: Install Node, Python, uv, and project dependencies for Nx workspace.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.13"
+
+    - uses: astral-sh/setup-uv@v3
+      with:
+        # Cache only kicks in once a Python package adds a uv.lock.
+        # Until then, an empty cache-dependency-glob avoids the
+        # "no matches found" error.
+        enable-cache: true
+        cache-dependency-glob: ""
+
+    - uses: nrwl/nx-set-shas@v4
+
+    - name: Install dependencies
+      shell: bash
+      run: npm ci
