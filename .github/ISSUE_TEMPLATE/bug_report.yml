@@ -1,0 +1,100 @@
+name: "🐛 Bug Report"
+description: Report a bug
+title: "(short issue description)"
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report.
+
+        **⚠️ If you've found a security vulnerability, do not open a public issue.** Use the
+        [AWS vulnerability reporting page](https://aws.amazon.com/security/vulnerability-reporting/) instead.
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behavior
+      description: |
+        What actually happened? Include full errors, stack traces, and CloudWatch log excerpts.
+        For Lambda failures include the request ID and timestamp.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: |
+        Steps to reproduce, or a minimal repro. The more self-contained, the faster we can diagnose.
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      multiple: true
+      options:
+        - "packages/cdk (CDK infrastructure)"
+        - "packages/scanner (Pusher Lambda)"
+        - "packages/scanner (Scanner Lambda)"
+        - "packages/canary (Synthetics canary)"
+        - "Other / unknown"
+    validations:
+      required: true
+  - type: input
+    id: aws-region
+    attributes:
+      label: AWS Region
+      description: e.g. us-east-1
+    validations:
+      required: true
+  - type: input
+    id: cdk-version
+    attributes:
+      label: CDK CLI version
+      description: Output of `cdk --version`
+    validations:
+      required: false
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+    validations:
+      required: false
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+    validations:
+      required: false
+  - type: input
+    id: operating-system
+    attributes:
+      label: OS
+    validations:
+      required: false
+  - type: textarea
+    id: solution
+    attributes:
+      label: Possible solution
+      description: Optional. Suggest a fix or root cause.
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+    validations:
+      required: false
