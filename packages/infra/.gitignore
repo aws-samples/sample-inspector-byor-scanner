@@ -1,5 +1,0 @@
-cdk.out/
-dist/
-*.d.ts
-*.js
-!eslint.config.mjs

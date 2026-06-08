@@ -1,0 +1,10 @@
+{
+  "canaryName": "scanner-canary-local",
+  "artifactS3Location": {
+    "s3Bucket": "REPLACE_WITH_YOUR_ARTIFACTS_BUCKET",
+    "s3Key": "local-run-artifacts"
+  },
+  "customerCanaryHandlerName": "index.handler",
+  "activeTracing": true,
+  "canaryRunId": "00000000-0000-0000-0000-000000000000"
+}

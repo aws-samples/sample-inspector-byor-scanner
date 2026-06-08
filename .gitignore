@@ -10,9 +10,16 @@ __pycache__/
 .venv/
 .pytest_cache/
 .ruff_cache/
+.coverage
+coverage/
+reports/
 
 # CDK
 cdk.out/
+
+# SAM
+.aws-sam/
+
 *.swp
 
 # Editors

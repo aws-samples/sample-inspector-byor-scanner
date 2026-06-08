@@ -1,4 +1,7 @@
 {
   "files": [],
-  "references": [{ "path": "./packages/infra" }]
+  "references": [
+    { "path": "./packages/infra" },
+    { "path": "./packages/canary" }
+  ]
 }
