@@ -21,8 +21,6 @@ runs:
         enable-cache: true
         cache-dependency-glob: ""
 
-    - uses: nrwl/nx-set-shas@v4
-
     - name: Install dependencies
       shell: bash
       run: npm ci
