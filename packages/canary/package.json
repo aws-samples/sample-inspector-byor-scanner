@@ -1,0 +1,32 @@
+{
+  "name": "@inspector-byor-scanner/canary",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT-0",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "sam:invoke": "cd sam && sam build && sam local invoke -e event.json"
+  },
+  "nx": {
+    "targets": {
+      "build": {
+        "cache": true,
+        "inputs": ["production", "^production"],
+        "outputs": ["{projectRoot}/dist"]
+      },
+      "sam:invoke": {
+        "cache": false,
+        "dependsOn": ["build"]
+      }
+    }
+  },
+  "dependencies": {
+    "@aws-sdk/client-lambda": "^3.1064.0",
+    "@aws-sdk/client-s3": "^3.1064.0",
+    "@aws/synthetics-logger": "^13.1.0",
+    "@aws/synthetics-puppeteer": "^13.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0"
+  }
+}

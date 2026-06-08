@@ -11,6 +11,10 @@
     "bootstrap": "cdk bootstrap"
   },
   "nx": {
+    "implicitDependencies": [
+      "@inspector-byor-scanner/canary",
+      "scanner"
+    ],
     "targets": {
       "synth": {
         "cache": true,

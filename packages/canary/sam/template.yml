@@ -1,0 +1,32 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Local-debug harness for the Inspector BYOR Scanner canary.
+
+# Per the AWS Synthetics local-debug guide, the canary runs as a Lambda
+# function. The Synthetics runtime is supplied via a Lambda layer; the
+# bundled handler lives at nodejs/node_modules/index.js inside the asset.
+# Update the layer ARN below if you target a different region.
+
+Parameters:
+  PusherFunctionName:
+    Type: String
+    Description: Name of the Pusher Lambda the canary should invoke.
+  FindingsBucket:
+    Type: String
+    Description: S3 bucket the Scanner Lambda writes findings to.
+
+Resources:
+  Canary:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../dist
+      Handler: cw-synthetics.handler
+      Runtime: nodejs22.x
+      Timeout: 900
+      MemorySize: 1024
+      Environment:
+        Variables:
+          PUSHER_FUNCTION_NAME: !Ref PusherFunctionName
+          FINDINGS_BUCKET: !Ref FindingsBucket
+      Layers:
+        - arn:aws:lambda:us-west-2:760325925879:layer:Synthetics:82
