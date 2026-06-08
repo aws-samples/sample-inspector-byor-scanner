@@ -19,5 +19,8 @@
     "nx": "22.7.5",
     "prettier": "^3.8.3",
     "typescript": "~6.0.3"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }
