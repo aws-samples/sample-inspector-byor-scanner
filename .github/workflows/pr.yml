@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
-      - run: npx nx run-many --target=test --output-style=stream --coverage
+      - run: npx nx run-many --target=test --output-style=stream
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -37,10 +37,6 @@ jobs:
 
   cdk-nag:
     name: CDK Nag
-    # TODO: Remove `if: false` once packages/cdk lands. The job should
-    # `cdk synth` with cdk-nag aspects applied and fail on any
-    # AwsSolutions / HIPAA / NIST findings that haven't been suppressed.
-    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
