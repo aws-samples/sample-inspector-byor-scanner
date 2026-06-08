@@ -1,0 +1,46 @@
+{
+  "name": "@inspector-byor-scanner/infra",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT-0",
+  "scripts": {
+    "synth": "cdk synth --quiet",
+    "deploy": "cdk deploy --all --require-approval never",
+    "diff": "cdk diff",
+    "destroy": "cdk destroy --all --force",
+    "bootstrap": "cdk bootstrap"
+  },
+  "nx": {
+    "targets": {
+      "synth": {
+        "cache": true,
+        "dependsOn": ["typecheck", "^build"],
+        "inputs": ["production", "^production"],
+        "outputs": ["{projectRoot}/cdk.out"]
+      },
+      "deploy": {
+        "cache": false,
+        "dependsOn": ["synth"]
+      },
+      "diff": {
+        "cache": false,
+        "dependsOn": ["typecheck", "^build"]
+      },
+      "destroy": {
+        "cache": false
+      },
+      "bootstrap": {
+        "cache": false
+      }
+    }
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.258.0",
+    "cdk-nag": "^2.38.2",
+    "constructs": "^10.4.2"
+  },
+  "devDependencies": {
+    "aws-cdk": "^2.1126.0",
+    "ts-node": "^10.9.2"
+  }
+}
