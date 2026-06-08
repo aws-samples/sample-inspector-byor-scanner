@@ -7,7 +7,12 @@
       "!{projectRoot}/.eslintrc.json",
       "!{projectRoot}/eslint.config.mjs",
       "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)",
-      "!{projectRoot}/tsconfig.spec.json"
+      "!{projectRoot}/tsconfig.spec.json",
+      "!{projectRoot}/test/**/*",
+      "!{projectRoot}/tests/**/*",
+      "!{projectRoot}/cdk.out",
+      "!{projectRoot}/dist",
+      "!{projectRoot}/sam/**/*"
     ],
     "sharedGlobals": []
   },
@@ -21,8 +26,10 @@
   ],
   "targetDefaults": {
     "build": { "dependsOn": ["install", "^build"] },
-    "lint": { "dependsOn": ["build"] },
-    "test": { "dependsOn": ["build"] }
+    "test": {
+      "dependsOn": ["^build"],
+      "inputs": ["default", "^production"]
+    }
   },
   "defaultBase": "main",
   "neverConnectToCloud": true,
