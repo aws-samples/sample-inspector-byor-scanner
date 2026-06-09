@@ -7,7 +7,7 @@ Per [AWS docs](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Cl
 - Docker (or Rancher Desktop with Docker runtime)
 - [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-install.html)
 - A deployed `ScannerStack`/`TestingStack` (the canary invokes real AWS resources)
-- AWS credentials in your environment (`aws configure` or `AWS_PROFILE=...`)
+- Valid AWS credentials in your shell — SAM downloads the Synthetics runtime layer on first run
 
 ## Run
 
