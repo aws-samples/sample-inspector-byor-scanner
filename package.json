@@ -8,7 +8,8 @@
     "build": "nx run-many --target=build --output-style=stream --nx-bail",
     "test": "nx run-many --target=test --output-style=stream --nx-bail",
     "lint": "nx run-many --target=lint --output-style=stream --nx-bail",
-    "graph": "nx graph"
+    "graph": "nx graph",
+    "clean": "rm -rf packages/*/dist packages/*/cdk.out packages/*/.aws-sam packages/*/tsconfig.tsbuildinfo coverage reports && nx reset"
   },
   "devDependencies": {
     "@nx/eslint": "22.7.5",
