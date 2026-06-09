@@ -5,6 +5,7 @@ on:
     branches: [main]
   push:
     branches: [main]
+  merge_group:
   schedule:
     - cron: "30 8 * * 1"
 
@@ -60,7 +61,7 @@ jobs:
 
   dependency-review:
     name: Dependency Review
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     permissions:
       contents: read
