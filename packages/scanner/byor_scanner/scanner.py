@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any
 
 from aws_lambda_powertools import Logger, Metrics, single_metric
@@ -56,9 +57,8 @@ def _record_failure(error_code: str, source: str) -> None:
     """Emit ImagesFailed three ways.
 
     1. Aggregate (no extra dims) ─ keeps the existing service-level series.
-    2. Dimensioned by ``source``  ─ per-trigger failure rate on dashboards.
-    3. ``errorCode`` as metadata  ─ surfaces in the EMF blob for log-based
-       drill-downs without spawning a metric series per code.
+    2. Dimensioned by ``errorCode`` ─ drives the per-operation alarms.
+    3. Dimensioned by ``source``   ─ per-trigger failure rate on dashboards.
 
     The dimensioned copies are emitted via ``single_metric`` so the
     dimensions don't bleed onto the other metrics emitted during this
@@ -66,6 +66,13 @@ def _record_failure(error_code: str, source: str) -> None:
     """
     metrics.add_metric(name="ImagesFailed", unit=MetricUnit.Count, value=1)
     metrics.add_metadata(key="errorCode", value=error_code)
+    with single_metric(
+        namespace=METRIC_NAMESPACE,
+        name="ImagesFailed",
+        unit=MetricUnit.Count,
+        value=1,
+    ) as metric:
+        metric.add_dimension(name="errorCode", value=error_code)
     with single_metric(
         namespace=METRIC_NAMESPACE,
         name="ImagesFailed",
@@ -87,14 +94,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG
     for record in event.get("Records", []):
         message_id = record["messageId"]
         attempt = int(record.get("attributes", {}).get("ApproximateReceiveCount", "1"))
+        scan_start = time.perf_counter()
 
         try:
             body = json.loads(record["body"])
             image = body["image"]
             ref = body["ref"]
-            # Accept the legacy `mode` field for one release so a redeploy
-            # doesn't require draining in-flight messages. New messages
-            # written by the rewritten discovery handler carry `source`.
             source = body.get("source") or body.get("mode") or "unknown"
             logger.append_keys(image=image, ref=ref, source=source, attempt=attempt)
             logger.info("Scan starting")
@@ -125,6 +130,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG
             _record_failure("UNKNOWN", source)
             failures.append({"itemIdentifier": message_id})
         finally:
+            metrics.add_metric(
+                name="ScanDuration",
+                unit=MetricUnit.Milliseconds,
+                value=(time.perf_counter() - scan_start) * 1000,
+            )
             logger.remove_keys(["image", "ref", "source", "attempt"])
 
     return {"batchItemFailures": failures}
