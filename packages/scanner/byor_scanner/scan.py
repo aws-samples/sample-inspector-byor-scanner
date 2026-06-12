@@ -200,6 +200,7 @@ def scan_image(req: ScanRequest) -> dict[str, Any]:
 
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+        _clean_skopeo_temps()
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────
@@ -354,3 +355,22 @@ def _count_by_severity(vulns: list[dict[str, Any]]) -> dict[str, int]:
                 counts[severity] += 1
                 break
     return counts
+
+
+def _clean_skopeo_temps() -> None:
+    """Remove skopeo's internal temp files from /tmp.
+
+    The containers/image library uses prefix 'container_images_' for all
+    temp files. Interrupted pulls (timeout, disk full) leave these behind.
+    Clean after each image to prevent accumulation across a batch.
+    """
+    import contextlib
+    import glob
+    import os
+
+    for path in glob.glob("/tmp/container_images_*"):
+        with contextlib.suppress(OSError):
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                os.remove(path)
