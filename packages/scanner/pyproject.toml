@@ -19,11 +19,15 @@ addopts = """
 name = "scanner"
 version = "1.0.0"
 description = "Inspector BYOR Scanner Lambda handlers"
-requires-python = ">=3.13,<4"
+requires-python = ">=3.11,<4"
 readme = 'README.md'
 dependencies = [
-    "aws-lambda-powertools[tracer]>=3.29.0",
+    "aws-lambda-powertools>=3.29.0",
     "boto3>=1.43.25",
+    # Pinned to match the AWS Distro for OpenTelemetry (ADOT) Lambda layer.
+    # Mismatched versions trigger a runtime warning. Bump together when
+    # rotating the ADOT layer ARN in scanner-stack.ts.
+    "opentelemetry-api==1.40.0",
 ]
 
 [tool.hatch.build.targets.wheel]
