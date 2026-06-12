@@ -1,10 +1,12 @@
 import { CfnOutput, Duration, Stack, StackProps } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import {
   IDiscoveryTrigger,
@@ -13,6 +15,7 @@ import {
   MtlsRepositoryAuth,
   S3ManifestTrigger,
 } from '@constructs/inspector-scanner';
+import { Observability } from './constructs/observability';
 
 export interface ScannerStackProps extends StackProps {
   /** VPC the Lambdas attach to. Must have private subnets and egress for AWS APIs. */
@@ -86,6 +89,9 @@ export class ScannerStack extends Stack {
   constructor(scope: Construct, id: string, props: ScannerStackProps) {
     super(scope, id, props);
 
+    const scannerTimeout = props.scannerTimeout ?? Duration.minutes(15);
+    const discoveryTimeout = Duration.minutes(5);
+
     const repositoryAuth =
       props.repositoryAuth ??
       new MtlsRepositoryAuth(this, 'RepositoryAuth', { secret: props.mtlsSecret });
@@ -104,7 +110,7 @@ export class ScannerStack extends Stack {
       repositoryAuth,
       trigger,
       findingsBucketKey: props.findingsBucketKey,
-      scannerTimeout: props.scannerTimeout,
+      scannerTimeout,
       scannerMemoryMiB: props.scannerMemoryMiB,
       scannerEphemeralStorageGiB: props.scannerEphemeralStorageGiB,
       sqsBatchSize: props.sqsBatchSize,
@@ -125,5 +131,51 @@ export class ScannerStack extends Stack {
           'Drop a JSON manifest (array of {image, ref}) here to fire a scan.',
       });
     }
+
+    // ─── Application Signals discovery + observability ─────────────────
+    // Application Signals must be enabled at the account level before it
+    // surfaces the instrumented Lambdas as services for the SLOs to bind
+    // to. StartDiscovery is idempotent and account-wide.
+    new cr.AwsCustomResource(this, 'AppSignalsDiscovery', {
+      onUpdate: {
+        service: 'application-signals',
+        action: 'StartDiscovery',
+        physicalResourceId: cr.PhysicalResourceId.of('app-signals-discovery'),
+      },
+      installLatestAwsSdk: true,
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: [
+            'application-signals:StartDiscovery',
+            'iam:CreateServiceLinkedRole',
+          ],
+          resources: ['*'],
+        }),
+      ]),
+    });
+
+    // SLOs (+ per-operation alarms) and the CloudWatch dashboard.
+    new Observability(this, 'Observability', {
+      scannerFunction: this.scannerFunction,
+      discoveryFunction: this.discoveryFunction,
+      queue: this.scanQueue,
+      scannerTimeout,
+      discoveryTimeout,
+    });
+
+    // ─── Outputs ───────────────────────────────────────────────────────
+    new CfnOutput(this, 'FindingsBucketName', {
+      value: this.findingsBucket.bucketName,
+    });
+    new CfnOutput(this, 'ScanQueueUrl', { value: this.scanQueue.queueUrl });
+    new CfnOutput(this, 'ScanDLQUrl', {
+      value: this.scanDeadLetterQueue.queueUrl,
+    });
+    new CfnOutput(this, 'ScannerFunctionName', {
+      value: this.scannerFunction.functionName,
+    });
+    new CfnOutput(this, 'DiscoveryFunctionName', {
+      value: this.discoveryFunction.functionName,
+    });
   }
 }
