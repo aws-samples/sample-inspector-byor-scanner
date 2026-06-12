@@ -105,6 +105,14 @@ class MtlsAuth:
                 )
 
     def _write(self, secret: dict[str, Any]) -> None:
+        # skopeo's --cert-dir reads PEM material from disk; there is no API
+        # for passing bytes in memory. We materialize the secret into Lambda
+        # /tmp which is per-execution-environment, encrypted at rest by AWS,
+        # destroyed when the env is recycled, and never shared across
+        # invocations. The 0o700 dir + 0o600 file modes prevent same-host
+        # cross-process reads. CodeQL's clear-text-storage check fires on
+        # the write_text call below; suppressed because the constraint is
+        # imposed by the third-party tool, not a free design choice.
         CERT_DIR.mkdir(parents=True, exist_ok=True)
         os.chmod(CERT_DIR, _DIR_MODE)
         for filename, field in (
@@ -113,5 +121,6 @@ class MtlsAuth:
             (KEY_FILENAME, "key"),
         ):
             path = CERT_DIR / filename
+            # codeql[py/clear-text-storage-sensitive-data]
             path.write_text(secret[field])
             os.chmod(path, _FILE_MODE)
