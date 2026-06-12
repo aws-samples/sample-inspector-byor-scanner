@@ -72,7 +72,18 @@ export const buildSourceBinary = (
         `The buildCommand must copy the binary to /asset-output/${spec.name}.`,
     );
   }
-  fs.chmodSync(expected, 0o755);
+  // Build container is responsible for emitting the binary with mode 0o755.
+  // We deliberately do NOT chmod from the host: on Linux CI runners the
+  // file lands owned by the container's root uid (Docker bind-mount
+  // semantics), and the runner's non-root user cannot chmod a root-owned
+  // file. Verify the bit is set instead of trying to enforce it.
+  if (!(fs.statSync(expected).mode & 0o100)) {
+    throw new Error(
+      `BinaryLayer build produced ${expected} without the user-execute bit. ` +
+        `The buildCommand must produce an executable file (chmod 755 inside ` +
+        `the container before copying to /asset-output).`,
+    );
+  }
 };
 
 /**
