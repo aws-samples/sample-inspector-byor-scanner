@@ -41,6 +41,7 @@
     },
     "package": {
       "executor": "nx:run-commands",
+      "dependsOn": ["build"],
       "outputs": ["{projectRoot}/dist/scanner-lambda.zip"],
       "options": {
         "commands": [
