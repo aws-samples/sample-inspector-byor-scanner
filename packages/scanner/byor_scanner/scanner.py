@@ -1,59 +1,105 @@
-"""Scanner Lambda — pulls images, generates SBOMs, calls Inspector ScanSbom.
+"""SQS-triggered scanner Lambda.
 
-Triggered by SQS event source mapping. Processes one image per message:
-1. skopeo inspect → resolve digest, size guard
-2. S3 SBOM cache check (by digest)
-3. skopeo copy → /tmp
-4. inspector-sbomgen → CycloneDX 1.5
-5. inspector-scan:ScanSbom → vulnerabilities
-6. Write findings to S3
+Receives a batch of SQS messages, each describing one image to scan, and
+delegates to ``scan_image`` for the per-image pipeline. Per-message
+failures are reported back via ``ReportBatchItemFailures`` so SQS only
+retries the failed messages, not the whole batch.
 
-TODO: Implement the pipeline. Returns ReportBatchItemFailures on
-per-message failure so SQS only retries the failed messages.
+Plugin loading happens once at cold start. The selected ``AuthProvider``
+fetches its credentials at the top of every invocation ─ fresh secrets
+are picked up automatically without redeploy.
 """
 
 from __future__ import annotations
 
+import json
+import os
 from typing import Any
 
-from aws_lambda_powertools import Logger, Metrics, Tracer
-from aws_lambda_powertools.utilities.batch import (
-    BatchProcessor,
-    EventType,
-    process_partial_response,
+from aws_lambda_powertools import Logger, Metrics
+from aws_lambda_powertools.metrics import MetricUnit
+
+from byor_scanner.config import config
+from byor_scanner.constants import (
+    ENV_AUTH_PROVIDER,
+    ENV_FINDINGS_BUCKET,
+    ENV_REGISTRY_URL,
+    METRIC_NAMESPACE,
+    SERVICE_SCANNER,
 )
-from aws_lambda_powertools.utilities.data_classes.sqs_event import SQSRecord
+from byor_scanner.errors import ScanError
+from byor_scanner.plugin_loader import load_plugin
+from byor_scanner.protocols import AuthProvider
+from byor_scanner.scan import ScanRequest, ensure_policy_json, scan_image
 
-logger = Logger()
-metrics = Metrics(namespace="BYORScan")
-tracer = Tracer()
+# Tracing is handled by the AWS Distro for OpenTelemetry (ADOT) Lambda layer
+# attached by the CDK stack. The layer's exec wrapper auto-creates a root
+# span around this handler and auto-instruments boto3 / requests / urllib3.
+# Per-stage spans are created with @tracer.start_as_current_span in scan.py
+# and friends.
 
-processor = BatchProcessor(event_type=EventType.SQS)
+logger = Logger(service=SERVICE_SCANNER)
+metrics = Metrics(namespace=METRIC_NAMESPACE, service=SERVICE_SCANNER)
 
+REGISTRY = os.environ.get(ENV_REGISTRY_URL, "")
+FINDINGS_BUCKET = os.environ.get(ENV_FINDINGS_BUCKET, "")
 
-@tracer.capture_method
-def _process_record(record: SQSRecord) -> None:
-    body = record.json_body
-    image = body["image"]
-    ref = body["ref"]
-    logger.info("processing image", extra={"image": image, "ref": ref})
-
-    # TODO: skopeo inspect → digest + size guard
-    # TODO: SBOM cache check
-    # TODO: skopeo copy → /tmp/img.tar
-    # TODO: inspector-sbomgen → /tmp/sbom.json
-    # TODO: ScanSbom (chunked if components > 5000)
-    # TODO: write findings to s3://{bucket}/findings/{image}/{short_digest}/{timestamp}.json
-    # TODO: cleanup /tmp
+# Load auth plugin once per cold start. setup() runs every invocation.
+auth: AuthProvider = load_plugin(
+    ENV_AUTH_PROVIDER,
+    AuthProvider,
+    default=config.auth_provider,
+)
 
 
-@logger.inject_lambda_context(log_event=True)
+@logger.inject_lambda_context(clear_state=True)
 @metrics.log_metrics
-@tracer.capture_lambda_handler
-def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    return process_partial_response(
-        event=event,
-        record_handler=_process_record,
-        processor=processor,
-        context=context,
-    )
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG001
+    """SQS event source mapping handler with partial-batch failure support."""
+    auth.setup()
+    ensure_policy_json()
+
+    failures: list[dict[str, str]] = []
+
+    for record in event.get("Records", []):
+        message_id = record["messageId"]
+        attempt = int(record.get("attributes", {}).get("ApproximateReceiveCount", "1"))
+
+        try:
+            body = json.loads(record["body"])
+            image = body["image"]
+            ref = body["ref"]
+            mode = body.get("mode", "unknown")
+            logger.append_keys(image=image, ref=ref, mode=mode, attempt=attempt)
+            logger.info("Scan starting")
+
+            scan_image(
+                ScanRequest(
+                    image=image,
+                    ref=ref,
+                    registry=REGISTRY,
+                    auth_args=auth.get_skopeo_args(),
+                    bucket=FINDINGS_BUCKET,
+                )
+            )
+
+        except ScanError as e:
+            logger.exception(
+                "Scan failed",
+                extra={"messageId": message_id, "errorCode": e.error_code},
+            )
+            metrics.add_metric(name="ImagesFailed", unit=MetricUnit.Count, value=1)
+            metrics.add_metadata(key="errorCode", value=e.error_code)
+            failures.append({"itemIdentifier": message_id})
+        except Exception:
+            logger.exception(
+                "Scan failed",
+                extra={"messageId": message_id, "errorCode": "UNKNOWN"},
+            )
+            metrics.add_metric(name="ImagesFailed", unit=MetricUnit.Count, value=1)
+            metrics.add_metadata(key="errorCode", value="UNKNOWN")
+            failures.append({"itemIdentifier": message_id})
+        finally:
+            logger.remove_keys(["image", "ref", "mode", "attempt"])
+
+    return {"batchItemFailures": failures}
