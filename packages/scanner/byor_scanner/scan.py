@@ -146,6 +146,7 @@ def scan_image(req: ScanRequest) -> dict[str, Any]:
             "Image skipped: too large",
             extra={
                 "outcome": "skipped",
+                "digest": ref,
                 "errorCode": "IMAGE_TOO_LARGE",
                 "sizeBytes": size,
             },
@@ -212,6 +213,7 @@ def scan_image(req: ScanRequest) -> dict[str, Any]:
             "Scan complete",
             extra={
                 "outcome": "success",
+                "digest": ref,
                 "sbomCacheHit": cache_hit,
                 "componentCount": len(sbom.get("components", [])),
                 "findingsTotal": len(vulns),

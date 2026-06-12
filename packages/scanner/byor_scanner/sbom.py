@@ -21,7 +21,12 @@ from opentelemetry import trace
 
 from byor_scanner.config import config
 from byor_scanner.constants import SERVICE_SCANNER
-from byor_scanner.errors import SCANSBOM_FAILED, SCANSBOM_THROTTLED, ScanError
+from byor_scanner.errors import (
+    SCANSBOM_FAILED,
+    SCANSBOM_THROTTLED,
+    SCANSBOM_VALIDATION,
+    ScanError,
+)
 
 logger = Logger(service=SERVICE_SCANNER)
 tracer = trace.get_tracer(__name__)
@@ -99,6 +104,11 @@ def _scan_single(sbom: dict[str, Any]) -> dict[str, Any]:
                 raise ScanError(
                     SCANSBOM_THROTTLED,
                     f"ScanSbom throttled after {MAX_RETRIES} attempts",
+                ) from e
+            if error_code == "ValidationException":
+                raise ScanError(
+                    SCANSBOM_VALIDATION,
+                    f"ScanSbom rejected the SBOM: {e}",
                 ) from e
             raise ScanError(SCANSBOM_FAILED, f"ScanSbom failed: {e}") from e
 
