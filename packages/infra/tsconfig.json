@@ -21,8 +21,14 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "outDir": "dist",
-    "rootDir": "."
+    "rootDir": ".",
+    "paths": {
+      "@constructs/*": ["./lib/constructs/*"]
+    }
   },
   "include": ["bin/**/*.ts", "lib/**/*.ts"],
-  "exclude": ["node_modules", "cdk.out", "dist"]
+  "exclude": ["node_modules", "cdk.out", "dist"],
+  "ts-node": {
+    "require": ["tsconfig-paths/register"]
+  }
 }
