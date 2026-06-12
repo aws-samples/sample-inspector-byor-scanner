@@ -18,17 +18,30 @@
     "targets": {
       "synth": {
         "cache": true,
-        "dependsOn": ["typecheck", "^build"],
-        "inputs": ["production", "^production"],
-        "outputs": ["{projectRoot}/cdk.out"]
+        "dependsOn": [
+          "typecheck",
+          "^build"
+        ],
+        "inputs": [
+          "production",
+          "^production"
+        ],
+        "outputs": [
+          "{projectRoot}/cdk.out"
+        ]
       },
       "deploy": {
         "cache": false,
-        "dependsOn": ["synth"]
+        "dependsOn": [
+          "synth"
+        ]
       },
       "diff": {
         "cache": false,
-        "dependsOn": ["typecheck", "^build"]
+        "dependsOn": [
+          "typecheck",
+          "^build"
+        ]
       },
       "destroy": {
         "cache": false
@@ -39,12 +52,17 @@
     }
   },
   "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.1066.0",
+    "@peculiar/x509": "^2.0.0",
     "aws-cdk-lib": "^2.258.1",
     "cdk-nag": "^2.38.2",
-    "constructs": "^10.4.2"
+    "constructs": "^10.4.2",
+    "reflect-metadata": "^0.2.2"
   },
   "devDependencies": {
+    "@types/aws-lambda": "^8.10.162",
     "aws-cdk": "^2.1126.0",
-    "ts-node": "^10.9.2"
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0"
   }
 }
