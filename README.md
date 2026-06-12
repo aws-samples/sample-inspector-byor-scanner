@@ -29,7 +29,7 @@ Three CFN stacks deploy in order:
 
 1. **`BinaryStack`** — owns the shared Lambda Layer holding `skopeo` + `inspector-sbomgen`.
 2. **`TestingStack`** *(sample only)* — VPC, mTLS-protected Distribution registry on ECS Fargate, self-signed certs generated at deploy time, one-shot Lambda seeder that pushes `alpine:3.19` into the registry.
-3. **`ScannerStack`** — S3 bucket, SQS queue + DLQ, Discovery Lambda, Scanner Lambda, optional EventBridge schedules, three CloudWatch alarms.
+3. **`ScannerStack`** — S3 bucket, SQS queue + DLQ, Discovery Lambda, Scanner Lambda, optional EventBridge schedules, CloudWatch alarms, Application Signals SLOs, and a dashboard.
 
 ## Repo layout
 
@@ -141,11 +141,55 @@ For a full step-by-step runbook — staging the mTLS secret, a dedicated `bin/pr
 
 ## Observability
 
-Both Lambdas are instrumented with [AWS Distro for OpenTelemetry](https://aws-otel.github.io/) via the ADOT Lambda layer — `tracing: lambda.Tracing.ACTIVE` plus the layer's auto-instrumentation produces full Application Signals + service map output. EMF metrics under namespace `BYORScan` cover `ImagesEnqueued`, `ImagesScanned`, `ImagesFailed` (with `errorCode` dimension), `SBOMCacheHit`/`Miss`, `VulnerabilitiesFound`, `DiscoveryFailed`. Three alarms ship out of the box:
+Both Lambdas are instrumented with [AWS Distro for OpenTelemetry](https://aws-otel.github.io/) via the ADOT Lambda layer — `tracing: lambda.Tracing.ACTIVE` plus the layer's auto-instrumentation produces full Application Signals + service map output, and the scan pipeline adds manual spans per stage (`ScanImage` → `InspectImage`, `PullImage`, `GenerateSBOM`, `ScanVulnerabilities`, `DeliverFindings`, …).
+
+### Metrics
+
+EMF metrics (Powertools) under namespace `BYORScan`, carrying a `service` dimension (`byor-scanner` / `byor-discovery`):
+
+| Metric | Notes |
+|--------|-------|
+| `ImagesScanned` / `ImagesFailed` / `ImagesSkipped` | scan outcomes; `ImagesFailed` is also emitted with an `errorCode` dimension for the per-operation alarms |
+| `ScanDuration` | per-image wall-clock in ms (p50/p99) |
+| `SBOMCacheHit` / `SBOMCacheMiss` | SBOM cache effectiveness |
+| `VulnerabilitiesFound` | findings per scan |
+| `ImagesEnqueued` | discovery fan-out (also dimensioned by `mode`) |
+| `DiscoveryFailed` | discovery-stage failures |
+
+### Alarms
+
+**Operational** (always on, the primary paging signals):
 
 - DLQ depth > 0
 - SQS oldest message age > 14h
 - Discovery Lambda errors > 0
+
+**Per-operation** — fire when an `errorCode` appears on `ImagesFailed` at least twice in 3 of 5 five-minute periods: `AUTH_FAILED`, `INSPECT_FAILED`, `PULL_FAILED`, `PULL_TIMEOUT`, `SBOMGEN_FAILED`, `SCANSBOM_FAILED`, `SCANSBOM_THROTTLED`, `SCANSBOM_VALIDATION`, `S3_WRITE_FAILED`.
+
+**Burn-rate** — one per SLO that isn't already covered by an operational alarm (scanner availability + latency, discovery latency, new-image-coverage, image-compatibility).
+
+### Service Level Objectives
+
+Seven [Application Signals](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Application-Signals.html) SLOs:
+
+| SLO | Threshold | Attainment goal |
+|-----|-----------|-----------------|
+| `byor-scanner-availability` | availability ≥ 99% | 99.9% |
+| `byor-scanner-latency` | p99 < 80% of scanner timeout | 99.9% |
+| `byor-discovery-availability` | availability ≥ 99% | 99.9% |
+| `byor-discovery-latency` | p99 < 80% of discovery timeout | 99.9% |
+| `byor-scan-freshness` | queue drains within 14h | 99% |
+| `byor-new-image-coverage` | p99 scan duration < 60 min | 99% |
+| `byor-image-compatibility` | scannable (not skipped) ≥ 95% | 95% |
+
+`byor-scan-freshness` and `byor-discovery-availability` are attainment-only (no burn-rate alarm), since the operational alarms above already page on those signals.
+
+### Dashboard
+
+A `BYORScan` CloudWatch dashboard:
+
+- **Logs Insights:** top 10 images by critical findings; all images with latest findings (by digest); repeatedly-failed images; failures by error code.
+- **Metrics:** scan volume, scan success rate, discovery volume, and scan duration (p50/p99).
 
 ## Security
 
