@@ -96,11 +96,12 @@ cd packages/infra && CDK_DEFAULT_ACCOUNT=<account> \
 cd packages/infra && CDK_DEFAULT_ACCOUNT=<account> \
   CDK_DEFAULT_REGION=<region> npx cdk deploy --all --require-approval never
 
-# Trigger an end-to-end scan against the deployed test registry
-DISC=$(aws cloudformation describe-stacks --stack-name ScannerStack \
-  --query 'Stacks[0].Outputs[?OutputKey==`DiscoveryFunctionName`].OutputValue' --output text)
-echo '{"mode":"manual","images":[{"image":"alpine","ref":"3.19"}]}' > /tmp/d.json
-aws lambda invoke --function-name "$DISC" --payload fileb:///tmp/d.json /tmp/o.json
+# Trigger an end-to-end scan against the deployed test registry by dropping
+# a manifest into the S3ManifestTrigger bucket (the default v1 trigger).
+BUCKET=$(aws cloudformation describe-stacks --stack-name ScannerStack \
+  --query 'Stacks[0].Outputs[?OutputKey==`ManifestBucketName`].OutputValue' --output text)
+echo '[{"image":"alpine","ref":"3.19"}]' > /tmp/m.json
+aws s3 cp /tmp/m.json "s3://$BUCKET/manifests/smoke.json"
 ```
 
 Set `AWS_PROFILE` (or `AWS_ACCESS_KEY_ID` etc.) to whatever credential mechanism your account uses, and substitute `<account>` / `<region>` for the target deployment.
