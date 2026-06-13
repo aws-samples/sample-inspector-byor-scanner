@@ -45,6 +45,7 @@ import boto3
 from aws_lambda_powertools import Logger, Metrics
 from aws_lambda_powertools.metrics import MetricUnit
 from opentelemetry import trace
+from opentelemetry.trace import StatusCode
 
 from byor_scanner.config import config
 from byor_scanner.constants import (
@@ -110,11 +111,19 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG
         enqueued = _enqueue(images, source)
     except ScanError as e:
         logger.exception("Discovery failed", extra={"errorCode": e.error_code})
+        span = trace.get_current_span()
+        span.set_status(StatusCode.ERROR, e.error_code)
+        span.record_exception(e)
+        span.set_attribute("http.status_code", 500)
         metrics.add_metric(name="DiscoveryFailed", unit=MetricUnit.Count, value=1)
         metrics.add_metadata(key="errorCode", value=e.error_code)
         raise
-    except Exception:
+    except Exception as e:
         logger.exception("Discovery failed", extra={"errorCode": "UNKNOWN"})
+        span = trace.get_current_span()
+        span.set_status(StatusCode.ERROR, "UNKNOWN")
+        span.record_exception(e)
+        span.set_attribute("http.status_code", 500)
         metrics.add_metric(name="DiscoveryFailed", unit=MetricUnit.Count, value=1)
         metrics.add_metadata(key="errorCode", value="UNKNOWN")
         raise

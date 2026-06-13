@@ -19,6 +19,8 @@ from typing import Any
 
 from aws_lambda_powertools import Logger, Metrics, single_metric
 from aws_lambda_powertools.metrics import MetricUnit
+from opentelemetry import trace
+from opentelemetry.trace import StatusCode
 
 from byor_scanner.config import config
 from byor_scanner.constants import (
@@ -51,6 +53,28 @@ auth: AuthProvider = load_plugin(
     AuthProvider,
     default=config.auth_provider,
 )
+
+
+def _trace_url() -> str:
+    """Build a CloudWatch/X-Ray console deep link for the current trace.
+
+    Powertools already logs ``xray_trace_id``; this turns the X-Ray root id
+    (from the ``_X_AMZN_TRACE_ID`` env var) into a clickable console URL so the
+    dashboard's failure widget can link straight to the trace. Returns an empty
+    string when no trace context is present (e.g. tracing disabled).
+    """
+    header = os.environ.get("_X_AMZN_TRACE_ID", "")
+    root = next(
+        (p[len("Root=") :] for p in header.split(";") if p.startswith("Root=")),
+        "",
+    )
+    if not root:
+        return ""
+    region = os.environ.get("AWS_REGION", "")
+    return (
+        f"https://{region}.console.aws.amazon.com/cloudwatch/home"
+        f"?region={region}#xray:traces/{root}"
+    )
 
 
 def _record_failure(error_code: str, source: str) -> None:
@@ -118,15 +142,31 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG
         except ScanError as e:
             logger.exception(
                 "Scan failed",
-                extra={"messageId": message_id, "errorCode": e.error_code},
+                extra={
+                    "messageId": message_id,
+                    "errorCode": e.error_code,
+                    "traceUrl": _trace_url(),
+                },
             )
+            span = trace.get_current_span()
+            span.set_status(StatusCode.ERROR, e.error_code)
+            span.record_exception(e)
+            span.set_attribute("http.status_code", 500)
             _record_failure(e.error_code, source)
             failures.append({"itemIdentifier": message_id})
-        except Exception:
+        except Exception as e:
             logger.exception(
                 "Scan failed",
-                extra={"messageId": message_id, "errorCode": "UNKNOWN"},
+                extra={
+                    "messageId": message_id,
+                    "errorCode": "UNKNOWN",
+                    "traceUrl": _trace_url(),
+                },
             )
+            span = trace.get_current_span()
+            span.set_status(StatusCode.ERROR, "UNKNOWN")
+            span.record_exception(e)
+            span.set_attribute("http.status_code", 500)
             _record_failure("UNKNOWN", source)
             failures.append({"itemIdentifier": message_id})
         finally:

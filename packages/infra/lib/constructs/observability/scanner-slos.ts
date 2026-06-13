@@ -4,16 +4,27 @@ import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import {
+  APPSIGNALS_ENV,
+  APPSIGNALS_NS,
   DISCOVERY_SERVICE,
   METRIC_NAMESPACE,
   SCANNER_SERVICE,
 } from './constants';
 import { ScannerAlarms } from './scanner-alarms';
-import { PeriodSlo, RequestBasedSlo, ServiceSlo } from './slo';
+import { PeriodSlo, RequestBasedSlo } from './slo';
 
 // Powertools emits the custom scanner metrics with a `service` default
 // dimension, so SLO queries must scope to it to match the data.
 const SCANNER_DIMENSIONS = [{ name: 'service', value: SCANNER_SERVICE }];
+
+/** Application Signals metric dimensions for a Lambda service's own operation. */
+function appSignalsDims(service: string, functionName: string) {
+  return [
+    { name: 'Service', value: service },
+    { name: 'Operation', value: `${functionName}/FunctionHandler` },
+    { name: 'Environment', value: APPSIGNALS_ENV },
+  ];
+}
 
 const SYSTEM_BURN_RATE_WINDOWS = [
   Duration.hours(1),
@@ -39,6 +50,12 @@ export interface ScannerSlosProps {
    * @default - a new `byor-scanner-slo-alarms` topic is created
    */
   readonly alarmTopic?: sns.ITopic;
+
+  /** Scanner Lambda function name — used for the Application Signals Operation dimension. */
+  readonly scannerFunctionName: string;
+
+  /** Discovery Lambda function name — used for the Application Signals Operation dimension. */
+  readonly discoveryFunctionName: string;
 }
 
 /**
@@ -62,45 +79,116 @@ export class ScannerSlos extends Construct {
 
     new ScannerAlarms(this, 'PerOperationAlarms', { alarmTopic: this.alarmTopic });
 
-    // ─── Service-bound SLOs (trace-correlated via Application Signals) ──
-    new ServiceSlo(this, 'DiscoveryAvailability', {
+    new RequestBasedSlo(this, 'ScannerAvailability', {
+      sloName: 'byor-scanner-availability',
+      description: 'Scanner availability — fraction of non-fault requests',
+      totalRequestCountMetric: [
+        {
+          id: 'total',
+          metricStat: {
+            metric: {
+              namespace: APPSIGNALS_NS,
+              metricName: 'Latency',
+              dimensions: appSignalsDims(SCANNER_SERVICE, props.scannerFunctionName),
+            },
+            period: 60,
+            stat: 'SampleCount',
+          },
+          returnData: true,
+        },
+      ],
+      badCountMetric: [
+        {
+          id: 'faults',
+          metricStat: {
+            metric: {
+              namespace: APPSIGNALS_NS,
+              metricName: 'Fault',
+              dimensions: appSignalsDims(SCANNER_SERVICE, props.scannerFunctionName),
+            },
+            period: 60,
+            stat: 'Sum',
+          },
+          returnData: true,
+        },
+      ],
+      attainmentGoal: 99.9,
+      alarmTopic: this.alarmTopic,
+    });
+
+    new PeriodSlo(this, 'ScannerLatency', {
+      sloName: 'byor-scanner-latency',
+      description: 'Scanner p99 latency under 80% of its timeout',
+      metric: new cloudwatch.Metric({
+        namespace: APPSIGNALS_NS,
+        metricName: 'Latency',
+        dimensionsMap: {
+          Service: SCANNER_SERVICE,
+          Operation: `${props.scannerFunctionName}/FunctionHandler`,
+          Environment: APPSIGNALS_ENV,
+        },
+        statistic: 'p99',
+        period: Duration.minutes(1),
+      }),
+      threshold: props.scannerTimeout.toMilliseconds() * 0.8,
+      comparisonOperator: 'LessThanOrEqualTo',
+      attainmentGoal: 99.9,
+      alarmTopic: this.alarmTopic,
+    });
+
+    new RequestBasedSlo(this, 'DiscoveryAvailability', {
       sloName: 'byor-discovery-availability',
-      description: 'Discovery Lambda availability',
-      serviceName: DISCOVERY_SERVICE,
-      metricType: 'AVAILABILITY',
-      threshold: 99,
+      description: 'Discovery availability — fraction of non-fault requests',
+      totalRequestCountMetric: [
+        {
+          id: 'total',
+          metricStat: {
+            metric: {
+              namespace: APPSIGNALS_NS,
+              metricName: 'Latency',
+              dimensions: appSignalsDims(DISCOVERY_SERVICE, props.discoveryFunctionName),
+            },
+            period: 60,
+            stat: 'SampleCount',
+          },
+          returnData: true,
+        },
+      ],
+      badCountMetric: [
+        {
+          id: 'faults',
+          metricStat: {
+            metric: {
+              namespace: APPSIGNALS_NS,
+              metricName: 'Fault',
+              dimensions: appSignalsDims(DISCOVERY_SERVICE, props.discoveryFunctionName),
+            },
+            period: 60,
+            stat: 'Sum',
+          },
+          returnData: true,
+        },
+      ],
       attainmentGoal: 99.9,
       // Attainment-only: a burn-rate alarm would duplicate DiscoveryFailureAlarm.
     });
 
-    new ServiceSlo(this, 'DiscoveryLatency', {
+    new PeriodSlo(this, 'DiscoveryLatency', {
       sloName: 'byor-discovery-latency',
       description: 'Discovery p99 latency under 80% of its timeout',
-      serviceName: DISCOVERY_SERVICE,
-      metricType: 'LATENCY',
-      statistic: 'p99',
+      metric: new cloudwatch.Metric({
+        namespace: APPSIGNALS_NS,
+        metricName: 'Latency',
+        dimensionsMap: {
+          Service: DISCOVERY_SERVICE,
+          Operation: `${props.discoveryFunctionName}/FunctionHandler`,
+          Environment: APPSIGNALS_ENV,
+        },
+        statistic: 'p99',
+        period: Duration.minutes(1),
+      }),
       threshold: props.discoveryTimeout.toMilliseconds() * 0.8,
-      attainmentGoal: 99.9,
-      alarmTopic: this.alarmTopic,
-    });
-
-    new ServiceSlo(this, 'ScannerAvailability', {
-      sloName: 'byor-scanner-availability',
-      description: 'Scanner Lambda availability',
-      serviceName: SCANNER_SERVICE,
-      metricType: 'AVAILABILITY',
-      threshold: 99,
-      attainmentGoal: 99.9,
-      alarmTopic: this.alarmTopic,
-    });
-
-    new ServiceSlo(this, 'ScannerLatency', {
-      sloName: 'byor-scanner-latency',
-      description: 'Scanner p99 latency under 80% of its timeout',
-      serviceName: SCANNER_SERVICE,
-      metricType: 'LATENCY',
-      statistic: 'p99',
-      threshold: props.scannerTimeout.toMilliseconds() * 0.8,
+      comparisonOperator: 'LessThanOrEqualTo',
       attainmentGoal: 99.9,
       alarmTopic: this.alarmTopic,
     });

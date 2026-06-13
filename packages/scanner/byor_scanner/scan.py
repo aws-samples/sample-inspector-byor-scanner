@@ -195,6 +195,11 @@ def scan_image(req: ScanRequest) -> dict[str, Any]:
 
         # Stage 6: write findings
         findings_key = _write_findings(req.bucket, req.image, ref, findings)
+        region = os.environ.get("AWS_REGION", "")
+        findings_url = (
+            f"https://{region}.console.aws.amazon.com/s3/object/"
+            f"{req.bucket}?region={region}&prefix={findings_key}"
+        )
 
         # Metrics
         vulns = findings.get("vulnerabilities", [])
@@ -218,7 +223,7 @@ def scan_image(req: ScanRequest) -> dict[str, Any]:
                 "componentCount": len(sbom.get("components", [])),
                 "findingsTotal": len(vulns),
                 **{f"findings{k.capitalize()}": v for k, v in severity_counts.items()},
-                "findingsKey": findings_key,
+                "findingsKey": findings_url,
             },
         )
         return {"outcome": "success", "findingsKey": findings_key}
