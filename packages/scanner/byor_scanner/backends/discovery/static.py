@@ -1,8 +1,8 @@
 """Static discovery backend.
 
 Returns the ``images`` list from the invocation event payload verbatim ─
-no external query. This is the default backend and the one used for
-manual / on-demand scans.
+no external query. The default plugin paired with ``ManualTrigger`` and
+the simplest pairing for canaries / on-demand scans.
 
 For real fleet discovery, ship a custom backend (see
 :class:`~byor_scanner.protocols.DiscoveryBackend`) and select it via
@@ -23,18 +23,19 @@ tracer = trace.get_tracer(__name__)
 
 
 class StaticDiscovery:
-    """Discover images from the event payload directly.
+    """Discover images from the event envelope directly.
 
-    Reads ``config["images"]`` and returns it as-is. Each entry MUST
-    already have ``image`` + ``ref`` keys ─ the discovery handler
+    Reads ``event["payload"]["images"]`` and returns it as-is. Each entry
+    MUST already have ``image`` + ``ref`` keys ─ the discovery handler
     validates this after :meth:`discover` returns.
     """
 
     @tracer.start_as_current_span("StaticDiscovery.discover")
-    def discover(self, mode: str, config: dict[str, Any]) -> list[dict[str, str]]:
-        images = config.get("images", [])
+    def discover(self, event: dict[str, Any]) -> list[dict[str, str]]:
+        payload = event.get("payload") or {}
+        images = payload.get("images", [])
         logger.info(
             "Static discovery returning images",
-            extra={"mode": mode, "count": len(images)},
+            extra={"count": len(images)},
         )
         return images
