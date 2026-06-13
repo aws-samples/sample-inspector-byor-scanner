@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { App } from 'aws-cdk-lib';
-import * as path from 'path';
 import { BinaryStack } from '../lib/binary-stack';
 import { ScannerStack } from '../lib/scanner-stack';
 import { TestingStack } from '../lib/testing-stack';
@@ -12,19 +11,15 @@ const env = {
   region: process.env.CDK_DEFAULT_REGION,
 };
 
-// The scanner Lambda zip directory ─ produced by `nx run scanner:package`.
-// Both Scanner + Testing stacks consume it (testing reuses the zip for the
-// registry seeder handler).
-const scannerLambdaCodePath = path.join(
-  __dirname, '..', '..', 'scanner', 'dist', 'lambda',
-);
-
 // Deploy order:
 //   1. BinaryStack ─ owns the skopeo + sbomgen layer.
 //   2. TestingStack ─ provisions VPC + test registry + mTLS secret + seeder.
 //   3. ScannerStack ─ consumes VPC / secret from TestingStack and the layer
 //      from BinaryStack.
 // `cdk deploy --all` follows the implicit dependency edges automatically.
+//
+// Python Lambda code is bundled at synth time via PythonFunction (uv-based);
+// no separate `nx run scanner:package` step is required before deploying.
 const binaries = new BinaryStack(app, 'BinaryStack', {
   env,
   description: 'Inspector BYOR Scanner — shared binary layer (skopeo, inspector-sbomgen)',
@@ -33,14 +28,9 @@ const binaries = new BinaryStack(app, 'BinaryStack', {
 const testing = new TestingStack(app, 'TestingStack', {
   env,
   description: 'Inspector BYOR Scanner — test registry and Synthetics canary',
-  scannerLambdaCodePath,
   binaryLayer: binaries.binaryLayer,
 });
 
-// ScannerStack defaults to an S3-manifest trigger: drop a JSON array of
-// {image, ref} into the auto-created bucket and the scan fires. Pass a
-// `trigger` prop to switch to `ScheduledTrigger` or `ManualTrigger` for
-// cadence-driven or canary-driven deploys.
 new ScannerStack(app, 'ScannerStack', {
   env,
   description: 'Inspector BYOR Scanner — core scanning infrastructure',

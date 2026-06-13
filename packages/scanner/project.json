@@ -39,20 +39,6 @@
       },
       "cache": true
     },
-    "package": {
-      "executor": "nx:run-commands",
-      "dependsOn": ["build"],
-      "outputs": ["{projectRoot}/dist/scanner-lambda.zip"],
-      "options": {
-        "commands": [
-          "rm -rf packages/scanner/dist/lambda packages/scanner/dist/scanner-lambda.zip",
-          "uv pip install --python 3.11 --target packages/scanner/dist/lambda packages/scanner",
-          "(cd packages/scanner/dist/lambda && zip -qr ../scanner-lambda.zip .)"
-        ],
-        "parallel": false
-      },
-      "cache": true
-    },
     "lint": {
       "executor": "@nxlv/python:ruff-check",
       "outputs": [],

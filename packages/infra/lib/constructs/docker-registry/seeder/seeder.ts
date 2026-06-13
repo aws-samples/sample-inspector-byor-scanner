@@ -1,3 +1,5 @@
+import * as path from 'path';
+import { PythonFunction } from '@aws-cdk/aws-lambda-python-alpha';
 import { CustomResource, Duration } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -6,18 +8,28 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 
-export interface DockerRegistrySeederProps {
-  /**
-   * Path to the scanner Lambda's deployment directory (the same one
-   * ScannerStack consumes). The seeder runs the
-   * ``byor_scanner.seeder.handler`` entry point from this zip ─ shares
-   * the MtlsAuth module with the scanner so cert handling stays in one
-   * place.
-   *
-   * Typical value: ``packages/scanner/dist/lambda``.
-   */
-  readonly scannerLambdaCodePath: string;
+/**
+ * Path to the scanner Python package the seeder shares with the scanner +
+ * discovery Lambdas. Resolved relative to this file: six dirs up to the
+ * workspace, then `scanner/`. PythonFunction bundles via `uv` at synth time.
+ */
+const SCANNER_ENTRY = path.join(
+  __dirname, '..', '..', '..', '..', '..', 'scanner',
+);
 
+/** Skip dev/test artifacts when copying the package into the bundling image. */
+const BUNDLE_EXCLUDES = [
+  'tests',
+  '.venv',
+  'dist',
+  '__pycache__',
+  '.pytest_cache',
+  '.ruff_cache',
+  '.mypy_cache',
+  '*.pyc',
+];
+
+export interface DockerRegistrySeederProps {
   /**
    * Layer holding the ``skopeo`` binary at ``/opt/bin/skopeo``. Pass the
    * same BinaryLayer the ScannerStack uses so the seeder, scanner, and
@@ -62,11 +74,13 @@ export class DockerRegistrySeeder extends Construct {
 
     const seedImages = props.seedImages ?? DEFAULT_SEED_IMAGES;
 
-    const seederFn = new lambda.Function(this, 'Function', {
+    const seederFn = new PythonFunction(this, 'Function', {
       runtime: lambda.Runtime.PYTHON_3_11,
       architecture: lambda.Architecture.X86_64,
-      handler: 'byor_scanner.seeder.handler',
-      code: lambda.Code.fromAsset(props.scannerLambdaCodePath),
+      entry: SCANNER_ENTRY,
+      index: 'byor_scanner/seeder.py',
+      handler: 'handler',
+      bundling: { assetExcludes: BUNDLE_EXCLUDES },
       timeout: Duration.minutes(10),
       memorySize: 1024,
       vpc: props.vpc,
