@@ -170,13 +170,13 @@ EMF metrics (Powertools) under namespace `BYORScan`, carrying a `service` dimens
 
 ### Service Level Objectives
 
-Seven [Application Signals](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Application-Signals.html) SLOs:
+Seven [Application Signals](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Application-Signals.html) SLOs. Availability and latency use **metric-based SLIs** over the `ApplicationSignals` `Latency`/`Fault` metrics (read as plain CloudWatch metrics, not service-bound `keyAttributes` SLIs), so every SLO **creates on the first deploy** — before the service has been discovered. Availability is the non-fault request ratio `(Latency SampleCount − Fault) / Latency SampleCount`; scan/discovery failures are marked as server faults (`http.status_code=500`) so they count against it.
 
-| SLO | Threshold | Attainment goal |
-|-----|-----------|-----------------|
-| `byor-scanner-availability` | availability ≥ 99% | 99.9% |
+| SLO | SLI | Attainment goal |
+|-----|-----|-----------------|
+| `byor-scanner-availability` | non-fault request ratio | 99.9% |
 | `byor-scanner-latency` | p99 < 80% of scanner timeout | 99.9% |
-| `byor-discovery-availability` | availability ≥ 99% | 99.9% |
+| `byor-discovery-availability` | non-fault request ratio | 99.9% |
 | `byor-discovery-latency` | p99 < 80% of discovery timeout | 99.9% |
 | `byor-scan-freshness` | queue drains within 14h | 99% |
 | `byor-new-image-coverage` | p99 scan duration < 60 min | 99% |
@@ -188,7 +188,7 @@ Seven [Application Signals](https://docs.aws.amazon.com/AmazonCloudWatch/latest/
 
 A `BYORScan` CloudWatch dashboard:
 
-- **Logs Insights:** top 10 images by critical findings; all images with latest findings (by digest); repeatedly-failed images; failures by error code.
+- **Logs Insights:** top 10 images by critical findings; all images with latest findings; repeatedly-failed images. Findings rows expose a clickable `FindingsURL` (S3 console) link, and the repeatedly-failed table includes a clickable `Trace` column that deep-links to the failure's X-Ray trace.
 - **Metrics:** scan volume, scan success rate, discovery volume, and scan duration (p50/p99).
 
 ## Security
