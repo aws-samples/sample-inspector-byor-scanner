@@ -131,18 +131,28 @@ export interface RequestBasedSloProps extends SloBaseProps {
   /** Metric queries defining the total request count. */
   readonly totalRequestCountMetric: applicationsignals.CfnServiceLevelObjective.MetricDataQueryProperty[];
 
-  /** Metric queries defining the good request count. */
-  readonly goodCountMetric: applicationsignals.CfnServiceLevelObjective.MetricDataQueryProperty[];
+  /** Metric queries defining the good request count. Provide this OR badCountMetric. */
+  readonly goodCountMetric?: applicationsignals.CfnServiceLevelObjective.MetricDataQueryProperty[];
+
+  /** Metric queries defining the bad request count. Provide this OR goodCountMetric. */
+  readonly badCountMetric?: applicationsignals.CfnServiceLevelObjective.MetricDataQueryProperty[];
 }
 
-/** Request-based SLO — good/total ratio from custom metrics. */
+/** Request-based SLO — good/total (or bad/total) ratio from custom metrics. */
 export class RequestBasedSlo extends BaseSlo {
   constructor(scope: Construct, id: string, props: RequestBasedSloProps) {
+    if (!props.goodCountMetric && !props.badCountMetric) {
+      throw new Error(
+        `RequestBasedSlo '${props.sloName}' requires goodCountMetric or badCountMetric`,
+      );
+    }
     super(scope, id, props, {
       requestBasedSli: {
         requestBasedSliMetric: {
           totalRequestCountMetric: props.totalRequestCountMetric,
-          monitoredRequestCountMetric: { goodCountMetric: props.goodCountMetric },
+          monitoredRequestCountMetric: props.goodCountMetric
+            ? { goodCountMetric: props.goodCountMetric }
+            : { badCountMetric: props.badCountMetric },
         },
       },
     });

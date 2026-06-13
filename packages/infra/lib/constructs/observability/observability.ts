@@ -13,6 +13,9 @@ export interface ObservabilityProps {
   /** Scanner Lambda — its log group backs the Logs Insights widgets. */
   readonly scannerFunction: lambda.IFunction;
 
+  /** Discovery Lambda — used for the Application Signals Operation dimension. */
+  readonly discoveryFunction: lambda.IFunction;
+
   /** Scan queue — passed through to the scan-freshness SLO. */
   readonly queue: sqs.IQueue;
 
@@ -46,6 +49,8 @@ export class Observability extends Construct {
       scannerTimeout: props.scannerTimeout,
       discoveryTimeout: props.discoveryTimeout,
       alarmTopic: props.alarmTopic,
+      scannerFunctionName: props.scannerFunction.functionName,
+      discoveryFunctionName: props.discoveryFunction.functionName,
     });
 
     const logGroup = `/aws/lambda/${props.scannerFunction.functionName}`;
@@ -60,7 +65,7 @@ export class Observability extends Construct {
         logGroupNames: [logGroup],
         queryLines: [
           'filter outcome = "success"',
-          'stats latest(findingsCritical) as Critical, latest(findingsHigh) as High, latest(findingsMedium) as Medium, latest(findingsLow) as Low, latest(findingsTotal) as Total, latest(ref) as Ref, latest(digest) as Digest, latest(findingsKey) as FindingsURL by image',
+          'stats latest(ref) as Ref, latest(findingsCritical) as Critical, latest(findingsHigh) as High, latest(findingsMedium) as Medium, latest(findingsLow) as Low, latest(findingsTotal) as Total, latest(digest) as Digest, latest(findingsKey) as FindingsURL by image',
           'sort Critical desc',
           'limit 10',
         ],
@@ -75,7 +80,7 @@ export class Observability extends Construct {
         logGroupNames: [logGroup],
         queryLines: [
           'filter outcome = "success"',
-          'stats latest(findingsCritical) as Critical, latest(findingsHigh) as High, latest(findingsMedium) as Medium, latest(findingsLow) as Low, latest(findingsTotal) as Total, latest(ref) as Ref, latest(digest) as Digest, latest(findingsKey) as FindingsURL by image',
+          'stats latest(ref) as Ref, latest(findingsCritical) as Critical, latest(findingsHigh) as High, latest(findingsMedium) as Medium, latest(findingsLow) as Low, latest(findingsTotal) as Total, latest(digest) as Digest, latest(findingsKey) as FindingsURL by image',
           'sort Critical desc',
           'limit 50',
         ],
@@ -91,23 +96,9 @@ export class Observability extends Construct {
         // Failures log "Scan failed" with an errorCode (no outcome field).
         queryLines: [
           'filter message = "Scan failed"',
-          'stats count(*) as failCount, latest(errorCode) as lastError, max(@timestamp) as lastFailed by image, ref',
+          'stats count(*) as failCount, latest(errorCode) as lastError, latest(traceUrl) as Trace, max(@timestamp) as lastFailed by image, ref',
           'sort failCount desc',
           'limit 25',
-        ],
-        width: 24,
-        height: 6,
-      }),
-    );
-
-    dashboard.addWidgets(
-      new cloudwatch.LogQueryWidget({
-        title: 'Failures by Error Code',
-        logGroupNames: [logGroup],
-        queryLines: [
-          'filter message = "Scan failed"',
-          'stats count(*) as failures by errorCode',
-          'sort failures desc',
         ],
         width: 24,
         height: 6,

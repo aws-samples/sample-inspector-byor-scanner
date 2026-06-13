@@ -13,3 +13,9 @@
 export const METRIC_NAMESPACE = 'BYORScan';
 export const SCANNER_SERVICE = 'byor-scanner';
 export const DISCOVERY_SERVICE = 'byor-discovery';
+
+/** CloudWatch namespace where Application Signals publishes Latency/Fault/Error/Throttle. */
+export const APPSIGNALS_NS = 'ApplicationSignals';
+
+/** Default Application Signals environment label for Lambda services. */
+export const APPSIGNALS_ENV = 'lambda:default';
