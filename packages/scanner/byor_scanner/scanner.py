@@ -16,7 +16,7 @@ import json
 import os
 from typing import Any
 
-from aws_lambda_powertools import Logger, Metrics
+from aws_lambda_powertools import Logger, Metrics, single_metric
 from aws_lambda_powertools.metrics import MetricUnit
 
 from byor_scanner.config import config
@@ -52,6 +52,29 @@ auth: AuthProvider = load_plugin(
 )
 
 
+def _record_failure(error_code: str, source: str) -> None:
+    """Emit ImagesFailed three ways.
+
+    1. Aggregate (no extra dims) ─ keeps the existing service-level series.
+    2. Dimensioned by ``source``  ─ per-trigger failure rate on dashboards.
+    3. ``errorCode`` as metadata  ─ surfaces in the EMF blob for log-based
+       drill-downs without spawning a metric series per code.
+
+    The dimensioned copies are emitted via ``single_metric`` so the
+    dimensions don't bleed onto the other metrics emitted during this
+    invocation.
+    """
+    metrics.add_metric(name="ImagesFailed", unit=MetricUnit.Count, value=1)
+    metrics.add_metadata(key="errorCode", value=error_code)
+    with single_metric(
+        namespace=METRIC_NAMESPACE,
+        name="ImagesFailed",
+        unit=MetricUnit.Count,
+        value=1,
+    ) as metric:
+        metric.add_dimension(name="source", value=source)
+
+
 @logger.inject_lambda_context(clear_state=True)
 @metrics.log_metrics
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG001
@@ -83,6 +106,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG
                     registry=REGISTRY,
                     auth_args=auth.get_skopeo_args(),
                     bucket=FINDINGS_BUCKET,
+                    source=source,
                 )
             )
 
@@ -91,16 +115,14 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG
                 "Scan failed",
                 extra={"messageId": message_id, "errorCode": e.error_code},
             )
-            metrics.add_metric(name="ImagesFailed", unit=MetricUnit.Count, value=1)
-            metrics.add_metadata(key="errorCode", value=e.error_code)
+            _record_failure(e.error_code, source)
             failures.append({"itemIdentifier": message_id})
         except Exception:
             logger.exception(
                 "Scan failed",
                 extra={"messageId": message_id, "errorCode": "UNKNOWN"},
             )
-            metrics.add_metric(name="ImagesFailed", unit=MetricUnit.Count, value=1)
-            metrics.add_metadata(key="errorCode", value="UNKNOWN")
+            _record_failure("UNKNOWN", source)
             failures.append({"itemIdentifier": message_id})
         finally:
             logger.remove_keys(["image", "ref", "source", "attempt"])

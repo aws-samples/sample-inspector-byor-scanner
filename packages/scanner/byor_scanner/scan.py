@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import boto3
-from aws_lambda_powertools import Logger, Metrics
+from aws_lambda_powertools import Logger, Metrics, single_metric
 from aws_lambda_powertools.metrics import MetricUnit
 from botocore.exceptions import ClientError
 from opentelemetry import trace
@@ -81,6 +81,29 @@ class ScanRequest:
     registry: str
     auth_args: list[str]
     bucket: str
+    # Trigger logical id from the SQS message (set by the discovery Lambda
+    # from the trigger's BYOR_TRIGGER_SOURCE env var or per-event override).
+    # Emitted as the `source` dimension on per-outcome metrics so dashboards
+    # can graph scan volume / failures per trigger.
+    source: str = "unknown"
+
+
+def _emit_outcome(name: str, source: str) -> None:
+    """Emit a count of ``name`` and a copy dimensioned by ``source``.
+
+    The aggregate ``add_metric`` keeps the global service-level series
+    untouched (today's dashboards keep working). ``single_metric`` writes
+    the dimensioned copy as its own EMF blob so the ``source`` dimension
+    does not bleed onto the other metrics emitted during this invocation.
+    """
+    metrics.add_metric(name=name, unit=MetricUnit.Count, value=1)
+    with single_metric(
+        namespace=METRIC_NAMESPACE,
+        name=name,
+        unit=MetricUnit.Count,
+        value=1,
+    ) as metric:
+        metric.add_dimension(name="source", value=source)
 
 
 def ensure_policy_json() -> None:
@@ -127,7 +150,7 @@ def scan_image(req: ScanRequest) -> dict[str, Any]:
                 "sizeBytes": size,
             },
         )
-        metrics.add_metric(name="ImagesSkipped", unit=MetricUnit.Count, value=1)
+        _emit_outcome("ImagesSkipped", req.source)
         return {"outcome": "skipped", "reason": "too_large"}
 
     # Stage 2: SBOM cache check (only meaningful when ref is a digest)
@@ -175,7 +198,7 @@ def scan_image(req: ScanRequest) -> dict[str, Any]:
         # Metrics
         vulns = findings.get("vulnerabilities", [])
         severity_counts = _count_by_severity(vulns)
-        metrics.add_metric(name="ImagesScanned", unit=MetricUnit.Count, value=1)
+        _emit_outcome("ImagesScanned", req.source)
         metrics.add_metric(
             name="VulnerabilitiesFound", unit=MetricUnit.Count, value=len(vulns)
         )
