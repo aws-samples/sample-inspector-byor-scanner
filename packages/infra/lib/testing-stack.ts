@@ -11,13 +11,6 @@ import {
 
 export interface TestingStackProps extends StackProps {
   /**
-   * Path to the scanner Lambda's deployment directory (the same one
-   * ScannerStack consumes). The seeder reuses this zip with a different
-   * handler ─ no separate packaging needed.
-   */
-  readonly scannerLambdaCodePath: string;
-
-  /**
    * Layer holding ``skopeo`` at ``/opt/bin/skopeo``. Provided by
    * ``BinaryStack`` and shared with ``ScannerStack``.
    */
@@ -91,7 +84,6 @@ export class TestingStack extends Stack {
     );
 
     new DockerRegistrySeeder(this, 'RegistrySeeder', {
-      scannerLambdaCodePath: props.scannerLambdaCodePath,
       binaryLayer: props.binaryLayer,
       vpc: this.vpc,
       securityGroups: [seederSg],

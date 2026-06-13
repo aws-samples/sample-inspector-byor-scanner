@@ -6,7 +6,6 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
-import * as path from 'path';
 import {
   IDiscoveryTrigger,
   InspectorScanner,
@@ -98,15 +97,10 @@ export class ScannerStack extends Stack {
       props.trigger ??
       new S3ManifestTrigger(this, 'Trigger', { source: 'Manifest' });
 
-    const lambdaCodePath = path.join(
-      __dirname, '..', '..', 'scanner', 'dist', 'lambda',
-    );
-
     const inspector = new InspectorScanner(this, 'Inspector', {
       vpc: props.vpc,
       registryUrl: props.registryUrl,
       binaryLayer: props.binaryLayer,
-      lambdaCodePath,
       repositoryAuth,
       trigger,
       findingsBucketKey: props.findingsBucketKey,

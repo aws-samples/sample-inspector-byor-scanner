@@ -1,3 +1,5 @@
+import * as path from 'path';
+import { PythonFunction } from '@aws-cdk/aws-lambda-python-alpha';
 import { CfnOutput, Duration, RemovalPolicy, Size, Stack } from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
@@ -11,6 +13,33 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import { IRepositoryAuth } from './auth';
 import { IDiscoveryTrigger } from './triggers';
+
+/**
+ * Path to the scanner Python package (`packages/scanner`). Resolved once at
+ * synth time relative to this file's location: the package lives four
+ * directories up at the workspace level. PythonFunction reads `pyproject.toml`
+ * + `uv.lock` from this entry and bundles via `uv` inside a Lambda runtime
+ * image — no external `nx run scanner:package` step required.
+ */
+const SCANNER_ENTRY = path.join(
+  __dirname, '..', '..', '..', '..', 'scanner',
+);
+
+/**
+ * Files to skip when copying the scanner package into the bundling image.
+ * Excluding these keeps the Lambda zip small and prevents rsync from choking
+ * on host-only artifacts (pytest cache, ruff cache, build outputs).
+ */
+const BUNDLE_EXCLUDES = [
+  'tests',
+  '.venv',
+  'dist',
+  '__pycache__',
+  '.pytest_cache',
+  '.ruff_cache',
+  '.mypy_cache',
+  '*.pyc',
+];
 
 const ENV_REGISTRY_URL = 'BYOR_REGISTRY_URL';
 const ENV_FINDINGS_BUCKET = 'BYOR_FINDINGS_BUCKET';
@@ -48,12 +77,6 @@ export interface InspectorScannerProps {
    * Provided by ``BinaryStack``.
    */
   readonly binaryLayer: lambda.ILayerVersion;
-
-  /**
-   * Path to the scanner Lambda's deployment directory (the
-   * ``packages/scanner/dist/lambda`` output of ``nx run scanner:package``).
-   */
-  readonly lambdaCodePath: string;
 
   /**
    * Repository auth ─ how the scanner Lambda authenticates to the
@@ -187,12 +210,17 @@ export class InspectorScanner extends Construct {
     };
 
     // ─── Scanner Lambda ──────────────────────────────────────────────────
-    this.scannerFunction = new lambda.Function(this, 'ScannerLambda', {
+    // PythonFunction bundles `packages/scanner` at synth time inside the
+    // SAM Python build image, using `uv` (auto-detected from uv.lock) to
+    // resolve dependencies. No external `nx run scanner:package` step.
+    this.scannerFunction = new PythonFunction(this, 'ScannerLambda', {
       runtime: lambda.Runtime.PYTHON_3_11,
       // x86_64 is mandatory: skopeo + sbomgen are linux/amd64 binaries.
       architecture: lambda.Architecture.X86_64,
-      handler: 'byor_scanner.scanner.handler',
-      code: lambda.Code.fromAsset(props.lambdaCodePath),
+      entry: SCANNER_ENTRY,
+      index: 'byor_scanner/scanner.py',
+      handler: 'handler',
+      bundling: { assetExcludes: BUNDLE_EXCLUDES },
       timeout: scannerTimeout,
       memorySize: scannerMemoryMiB,
       ephemeralStorageSize: Size.gibibytes(scannerEphemeralStorageGiB),
@@ -244,11 +272,13 @@ export class InspectorScanner extends Construct {
     );
 
     // ─── Discovery Lambda ────────────────────────────────────────────────
-    this.discoveryFunction = new lambda.Function(this, 'DiscoveryLambda', {
+    this.discoveryFunction = new PythonFunction(this, 'DiscoveryLambda', {
       runtime: lambda.Runtime.PYTHON_3_11,
       architecture: lambda.Architecture.X86_64,
-      handler: 'byor_scanner.discovery_handler.handler',
-      code: lambda.Code.fromAsset(props.lambdaCodePath),
+      entry: SCANNER_ENTRY,
+      index: 'byor_scanner/discovery_handler.py',
+      handler: 'handler',
+      bundling: { assetExcludes: BUNDLE_EXCLUDES },
       timeout: Duration.minutes(5),
       memorySize: 512,
       tracing: lambda.Tracing.ACTIVE,
