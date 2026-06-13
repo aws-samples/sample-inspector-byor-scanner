@@ -68,8 +68,8 @@ The build host platform doesn't matter; binaries are always compiled for `linux/
 ```bash
 npm install                          # JS workspaces + auto-runs uv sync for Python pkgs
 npx nx run-many -t test,lint         # tests + lint across all packages
-npx nx run scanner:package           # build the Lambda zip (~16 MB)
-npx nx run infra:synth               # synth all three stacks
+npx nx run infra:synth               # synth all three stacks (PythonFunction bundles
+                                     #   the Lambda zip via uv during synth)
 ```
 
 First deploy (uses default sample stacks: BinaryStack + TestingStack + ScannerStack):

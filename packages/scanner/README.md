@@ -28,16 +28,15 @@ byor_scanner/
 ## Targets
 
 ```sh
-nx run scanner:test       # pytest (21 tests)
+nx run scanner:test       # pytest
 nx run scanner:lint       # ruff check
 nx run scanner:format     # ruff format
-nx run scanner:package    # build dist/scanner-lambda.zip (~16 MB)
 
 nx run scanner:add --name <pkg>          # add a runtime dependency (uv-backed)
 nx run scanner:add --name <pkg> --dev    # add a dev dependency
 ```
 
-`nx run scanner:package` invokes `uv pip install --python 3.11 --target dist/lambda packages/scanner` then zips the result. The Lambda zip carries Python code + Python deps only — `skopeo` and `inspector-sbomgen` ship in the shared `BinaryStack` Lambda Layer (see `packages/infra/`).
+The CDK side bundles this package into the Lambda zip at `cdk synth` time via `aws-lambda-python-alpha`'s `PythonFunction` (uv-driven, hash-keyed off `pyproject.toml` + `uv.lock` + the source tree). There is no separate `package` step. `skopeo` and `inspector-sbomgen` ship in the shared `BinaryStack` Lambda Layer (see `packages/infra/`).
 
 ## Plugin model
 
