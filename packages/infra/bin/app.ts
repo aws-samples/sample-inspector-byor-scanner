@@ -37,6 +37,10 @@ const testing = new TestingStack(app, 'TestingStack', {
   binaryLayer: binaries.binaryLayer,
 });
 
+// ScannerStack defaults to an S3-manifest trigger: drop a JSON array of
+// {image, ref} into the auto-created bucket and the scan fires. Pass a
+// `trigger` prop to switch to `ScheduledTrigger` or `ManualTrigger` for
+// cadence-driven or canary-driven deploys.
 new ScannerStack(app, 'ScannerStack', {
   env,
   description: 'Inspector BYOR Scanner — core scanning infrastructure',
@@ -44,9 +48,6 @@ new ScannerStack(app, 'ScannerStack', {
   registryUrl: testing.registryEndpoint,
   mtlsSecret: testing.clientSecret,
   binaryLayer: binaries.binaryLayer,
-  // Schedules off in the sample so the canary's manual invokes are the
-  // only traffic. Production deploys override to true.
-  enableSchedules: false,
 });
 
 // TODO: re-enable cdk-nag (AwsSolutionsChecks) once both stacks have the
