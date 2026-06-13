@@ -23,8 +23,8 @@ A serverless container vulnerability scanner that:
   - Your registry hostname
   - AWS service endpoints (S3, SQS, Secrets Manager, Inspector, CloudWatch)
 - An mTLS client cert + key + CA bundle that your registry accepts
-- CDK CLI v2.258+, Node 20+, Docker (for `cdk synth` to build the binary
-  layer; the Python Lambda zip is built by `nx run scanner:package`)
+- CDK CLI v2.258+, Node 20+, Docker (for `cdk synth` to bundle the Python
+  Lambdas via `aws-lambda-python-alpha`)
 
 ## Step 1 — Stage the mTLS material in Secrets Manager
 
@@ -69,7 +69,6 @@ and seeds `alpine:3.19`). Write your own entry point at
 
 ```ts
 #!/usr/bin/env node
-import * as path from 'path';
 import { App, Stack } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
@@ -97,15 +96,11 @@ class ProdScannerStack extends Stack {
     const mtlsSecret = secretsmanager.Secret.fromSecretNameV2(
       this, 'MtlsSecret', 'byor-scanner/registry-mtls',
     );
-    const lambdaCodePath = path.join(
-      __dirname, '..', '..', 'scanner', 'dist', 'lambda',
-    );
 
     new InspectorScanner(this, 'Inspector', {
       vpc,
       registryUrl: 'registry.example.internal',  // host only, no scheme, no path
       binaryLayer: binaries.binaryLayer,
-      lambdaCodePath,
       repositoryAuth: new MtlsRepositoryAuth(this, 'Auth', { secret: mtlsSecret }),
       trigger: new S3ManifestTrigger(this, 'Manifest', { source: 'Manifest' }),
     });
@@ -118,7 +113,6 @@ new ProdScannerStack(app, 'ProdScannerStack');
 Then run:
 
 ```sh
-npx nx run scanner:package
 npx cdk --app 'npx ts-node bin/prod.ts' deploy --all
 ```
 
@@ -127,15 +121,14 @@ npx cdk --app 'npx ts-node bin/prod.ts' deploy --all
 ```sh
 git clone <repo>
 cd <repo> && npm install
-npx nx run scanner:package
 cd packages/infra
 CDK_DEFAULT_ACCOUNT=<account> CDK_DEFAULT_REGION=us-west-2 \
   npx cdk --app 'npx ts-node bin/prod.ts' deploy --all --require-approval never
 ```
 
 Synth time on first run is ~3 minutes (Docker bundles `skopeo` from source
-for the BinaryLayer). Subsequent synths are near-instant — the binary
-layer is content-hashed.
+for the BinaryLayer, then bundles the Python Lambda zip via `uv`).
+Subsequent synths are near-instant — both layers are content-hashed.
 
 ## Step 4 — Trigger your first scan
 

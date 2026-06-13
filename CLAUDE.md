@@ -85,10 +85,8 @@ cd packages/scanner && uv run pytest tests/                 # bypass nx cache
 npx nx run scanner:lint                                     # ruff
 cd packages/infra && npx tsc --noEmit                       # TS typecheck (no nx target yet)
 
-# Build the Lambda zip
-npx nx run scanner:package                                  # ~16 MB; binaries NOT included
-
-# Synth all three stacks
+# Synth all three stacks (PythonFunction bundles the Lambda zip via uv
+# during synth — no separate `nx run scanner:package` step required)
 cd packages/infra && CDK_DEFAULT_ACCOUNT=<account> \
   CDK_DEFAULT_REGION=<region> npx cdk synth --quiet
 
