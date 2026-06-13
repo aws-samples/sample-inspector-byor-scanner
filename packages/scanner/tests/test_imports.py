@@ -20,7 +20,7 @@ def test_protocols_runtime_checkable() -> None:
         def get_skopeo_args(self) -> list[str]: return []
 
     class _Discovery:
-        def discover(self, mode: str, config: dict) -> list[dict]:
+        def discover(self, event: dict) -> list[dict]:
             return []
 
     assert isinstance(_Auth(), protocols.AuthProvider)

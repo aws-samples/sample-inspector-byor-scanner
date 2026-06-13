@@ -63,6 +63,25 @@ class DiscoveryBackend(Protocol):
     orchestration database, a Harbor / GitLab API, an S3 manifest, ...) and
     return a list of image references.
 
+    ## Event envelope
+
+    Every plugin's :meth:`discover` is called with the same envelope, regardless
+    of whether the trigger was an EventBridge schedule, an S3 OBJECT_CREATED
+    event, or a manual ``aws lambda invoke``::
+
+        {
+          "source": "Hourly" | "Manifest" | "Manual" | <whatever>,
+          "payload": <opaque dict the trigger built>,
+        }
+
+    ``source`` is the trigger's logical id (used for log context and the
+    ``source`` metric dimension). ``payload`` is whatever the trigger placed
+    in its event input — for a schedule, the JSON the customer wrote in
+    ``ScheduledTrigger.schedules[].payload``; for an S3 manifest trigger, the
+    raw S3 event body; for a manual invoke, the payload the caller sent.
+
+    The plugin owns parsing ``payload``. The handler does not interpret it.
+
     ## Return value
 
     Each returned dict MUST contain:
@@ -88,12 +107,11 @@ class DiscoveryBackend(Protocol):
             \"\"\"Discover images by querying a Harbor instance.\"\"\"
 
             @tracer.start_as_current_span("HarborDiscovery.discover")
-            def discover(
-                self, mode: str, config: dict[str, Any]
-            ) -> list[dict[str, str]]:
-                logger.info("Discovery starting", extra={"mode": mode})
-                images = []
-                # ... call Harbor API, build the list ...
+            def discover(self, event: dict[str, Any]) -> list[dict[str, str]]:
+                payload = event.get("payload", {})
+                window = payload.get("window", "PT1H")
+                logger.info("Discovery starting", extra={"window": window})
+                images = []  # ... call Harbor API, build the list ...
                 logger.info("Discovery complete", extra={"count": len(images)})
                 return images
 
@@ -101,17 +119,14 @@ class DiscoveryBackend(Protocol):
     ``BYOR_DISCOVERY_BACKEND=my_backend.HarborDiscovery``.
     """
 
-    def discover(self, mode: str, config: dict[str, Any]) -> list[dict[str, str]]:
+    def discover(self, event: dict[str, Any]) -> list[dict[str, str]]:
         """Return list of images to scan.
 
-        :param mode: Trigger mode (e.g. ``"hourly"``, ``"full"``,
-            ``"manual"``). Use this to scope queries ─ ``"hourly"`` typically
-            returns only images deployed in the last hour, ``"full"`` returns
-            everything, ``"manual"`` is for ad-hoc invocations from the
-            payload.
-        :param config: Runtime config passed in the EventBridge schedule input
-            or the manual invocation payload. Useful for endpoint overrides
-            or query filters without redeploying.
+        :param event: The handler's event envelope — ``{"source", "payload"}``.
+            ``payload`` is opaque (set by the trigger that fired this
+            invocation); the plugin owns parsing it. ``source`` is the
+            trigger's logical id; the plugin SHOULD ignore it for control
+            flow (the handler already routes by plugin selection).
         :returns: List of dicts with ``image`` and ``ref`` keys.
         """
         ...

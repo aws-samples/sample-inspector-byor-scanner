@@ -1,24 +1,36 @@
 """Discovery Lambda: find images and fan out to SQS for scanning.
 
-Triggered three ways:
+Triggered by whatever ``IDiscoveryTrigger`` the deploy wired up (today: an
+S3 manifest bucket, EventBridge schedules, or direct invocation). The
+trigger sets ``BYOR_TRIGGER_SOURCE`` on this Lambda's env so every event
+this handler receives is tagged with a logical source name even when the
+event itself doesn't carry one.
 
-  - **EventBridge Scheduler** (e.g. hourly / 12-hourly cron) ─ event has
-    ``{"mode": "hourly" | "full"}``.
-  - **Direct invoke** (canary / on-demand) ─ event has
-    ``{"mode": "manual", "images": [{image, ref}, ...]}``. The static
-    backend returns the ``images`` list verbatim; no external query.
-  - **Direct invoke with backend params** ─ event has
-    ``{"mode": "<mode>", "config": {...}}``. The ``config`` payload is
-    forwarded to the backend's :meth:`~DiscoveryBackend.discover` method
-    for endpoint overrides or query filters without redeploying.
+## Event envelope
+
+Every plugin's :meth:`discover` is called with the same shape::
+
+    {
+      "source":  "Hourly" | "Manifest" | "Manual" | <whatever>,
+      "payload": <opaque dict — the trigger's input, plugin owns parsing>
+    }
+
+For triggers that fire many distinct events (e.g. ``ScheduledTrigger``'s
+N schedules), each event arrives with its own ``source`` and ``payload``
+inside the envelope. For single-fire triggers (S3 manifest, manual), the
+incoming event is wrapped here with ``source`` defaulting to
+``BYOR_TRIGGER_SOURCE`` and ``payload`` being the raw event itself.
+
+## SQS message
 
 Every batch enqueued to SQS carries::
 
-    {"image": "...", "ref": "...", "mode": "<mode>", "requestedAt": "<ISO>"}
+    {"image": "...", "ref": "...", "source": "<source>", "requestedAt": "<ISO>"}
 
 The scanner Lambda consumes these messages from the SQS event source
-mapping. Per-message ``ref`` is whatever the discovery backend returned
-─ a tag or a digest; the scanner pipeline resolves either form.
+mapping. ``ref`` is whatever the discovery backend returned ─ a tag or a
+digest; the scanner pipeline resolves either form. ``source`` is
+forwarded for log + metric context.
 """
 
 from __future__ import annotations
@@ -37,13 +49,14 @@ from opentelemetry import trace
 from byor_scanner.config import config
 from byor_scanner.constants import (
     DEFAULT_MAX_DISCOVERED,
+    DEFAULT_TRIGGER_SOURCE,
     ENV_DISCOVERY_BACKEND,
     ENV_MAX_DISCOVERED,
     ENV_QUEUE_URL,
+    ENV_TRIGGER_SOURCE,
     METRIC_NAMESPACE,
     SERVICE_DISCOVERY,
     SQS_BATCH_SIZE,
-    VALID_MODES,
 )
 from byor_scanner.errors import (
     CONFIG_ERROR,
@@ -82,19 +95,19 @@ discovery: DiscoveryBackend = load_plugin(
 @logger.inject_lambda_context(clear_state=True)
 @metrics.log_metrics
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG001
-    """EventBridge / direct-invoke entry point."""
+    """Trigger-agnostic entry point. See module docstring for the envelope."""
     if not QUEUE_URL:
         raise ScanError(CONFIG_ERROR, f"{ENV_QUEUE_URL} is not configured")
 
-    mode = event.get("mode")
-    _validate_mode(mode)
-    logger.append_keys(mode=mode)
+    envelope = _envelope_for(event)
+    source = envelope["source"]
+    logger.append_keys(source=source)
     logger.info("Discovery starting")
 
     try:
-        images = _resolve_images(mode, event)
+        images = _query_with_retry(envelope)
         _validate_images(images)
-        enqueued = _enqueue(images, mode)
+        enqueued = _enqueue(images, source)
     except ScanError as e:
         logger.exception("Discovery failed", extra={"errorCode": e.error_code})
         metrics.add_metric(name="DiscoveryFailed", unit=MetricUnit.Count, value=1)
@@ -107,38 +120,39 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG
         raise
 
     metrics.add_metric(name="ImagesEnqueued", unit=MetricUnit.Count, value=enqueued)
-    metrics.add_dimension(name="mode", value=mode)
+    metrics.add_dimension(name="source", value=source)
     logger.info("Discovery complete", extra={"imagesEnqueued": enqueued})
-    return {"mode": mode, "imagesEnqueued": enqueued}
+    return {"source": source, "imagesEnqueued": enqueued}
 
 
-def _validate_mode(mode: Any) -> None:
-    if not isinstance(mode, str) or not mode:
-        raise ScanError(
-            INVALID_INPUT,
-            f"Discovery event must include 'mode' as a non-empty string. "
-            f"Valid modes: {sorted(VALID_MODES)}",
-        )
-    if mode not in VALID_MODES:
-        raise ScanError(
-            INVALID_INPUT,
-            f"Unknown mode {mode!r}. Valid modes: {sorted(VALID_MODES)}",
-        )
+def _envelope_for(event: dict[str, Any]) -> dict[str, Any]:
+    """Wrap the raw Lambda event in the ``{source, payload}`` envelope.
+
+    If the event already carries a ``source`` key (e.g. EventBridge schedule
+    inputs authored with ``ScheduledTrigger``'s per-schedule payload), the
+    event is treated as the envelope itself. Otherwise the raw event is
+    treated as the payload and ``source`` falls back to
+    ``BYOR_TRIGGER_SOURCE`` (set by the trigger construct), then to
+    ``DEFAULT_TRIGGER_SOURCE``.
+    """
+    if isinstance(event, dict) and "source" in event:
+        return {
+            "source": event.get("source") or _default_source(),
+            "payload": event.get("payload") or {},
+        }
+    return {"source": _default_source(), "payload": event or {}}
+
+
+def _default_source() -> str:
+    return os.environ.get(ENV_TRIGGER_SOURCE) or DEFAULT_TRIGGER_SOURCE
 
 
 @tracer.start_as_current_span("ResolveImages")
-def _resolve_images(mode: str, event: dict[str, Any]) -> list[dict[str, str]]:
-    """Manual mode reads ``event.images``; other modes call the backend."""
-    if mode == "manual":
-        return list(event.get("images", []))
-    return _query_with_retry(mode, event.get("config", {}))
-
-
-def _query_with_retry(mode: str, params: dict[str, Any]) -> list[dict[str, str]]:
+def _query_with_retry(envelope: dict[str, Any]) -> list[dict[str, str]]:
     last_exc: Exception | None = None
     for attempt in range(MAX_RETRIES):
         try:
-            return discovery.discover(mode, params)
+            return discovery.discover(envelope)
         except Exception as e:
             last_exc = e
             if attempt == MAX_RETRIES - 1:
@@ -181,7 +195,7 @@ def _validate_images(images: list[dict[str, str]]) -> None:
 
 
 @tracer.start_as_current_span("EnqueueBatch")
-def _enqueue(images: list[dict[str, str]], mode: str) -> int:
+def _enqueue(images: list[dict[str, str]], source: str) -> int:
     if not images:
         return 0
 
@@ -197,7 +211,7 @@ def _enqueue(images: list[dict[str, str]], mode: str) -> int:
                     {
                         "image": img["image"],
                         "ref": img["ref"],
-                        "mode": mode,
+                        "source": source,
                         "requestedAt": requested_at,
                     }
                 ),

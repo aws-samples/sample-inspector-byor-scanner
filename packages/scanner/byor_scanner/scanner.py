@@ -69,8 +69,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG
             body = json.loads(record["body"])
             image = body["image"]
             ref = body["ref"]
-            mode = body.get("mode", "unknown")
-            logger.append_keys(image=image, ref=ref, mode=mode, attempt=attempt)
+            # Accept the legacy `mode` field for one release so a redeploy
+            # doesn't require draining in-flight messages. New messages
+            # written by the rewritten discovery handler carry `source`.
+            source = body.get("source") or body.get("mode") or "unknown"
+            logger.append_keys(image=image, ref=ref, source=source, attempt=attempt)
             logger.info("Scan starting")
 
             scan_image(
@@ -100,6 +103,6 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG
             metrics.add_metadata(key="errorCode", value="UNKNOWN")
             failures.append({"itemIdentifier": message_id})
         finally:
-            logger.remove_keys(["image", "ref", "mode", "attempt"])
+            logger.remove_keys(["image", "ref", "source", "attempt"])
 
     return {"batchItemFailures": failures}

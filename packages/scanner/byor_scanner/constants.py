@@ -26,6 +26,13 @@ ENV_MAX_DISCOVERED = "BYOR_MAX_DISCOVERED"
 ENV_REGISTRY_URL = "BYOR_REGISTRY_URL"
 ENV_FINDINGS_BUCKET = "BYOR_FINDINGS_BUCKET"
 ENV_QUEUE_URL = "BYOR_QUEUE_URL"
+# Trigger logical id, set by the trigger construct on the discovery Lambda.
+# Used as the default `source` value when an event does not carry one.
+ENV_TRIGGER_SOURCE = "BYOR_TRIGGER_SOURCE"
+# Manifest bucket name, set by S3ManifestTrigger for the S3ManifestDiscovery
+# plugin. The plugin reads the bucket from S3 event Records, so this is only
+# used for log context / direct-invoke testing.
+ENV_MANIFEST_BUCKET = "BYOR_MANIFEST_BUCKET"
 ENV_MAX_IMAGE_SIZE_GB = "BYOR_MAX_IMAGE_SIZE_GB"
 ENV_TLS_VERIFY = "BYOR_TLS_VERIFY"
 ENV_INSPECT_TIMEOUT = "BYOR_INSPECT_TIMEOUT"
@@ -69,7 +76,7 @@ METRIC_NAMESPACE = "BYORScan"
 SQS_BATCH_SIZE = 10  # SendMessageBatch hard limit
 DEFAULT_MAX_DISCOVERED = 50_000  # Hard cap on discovery result size
 
-# Valid trigger modes. Adding a new mode = breaking the SQS message contract,
-# so this set is intentionally small. Custom backends MAY accept other mode
-# strings internally but the discovery handler will reject them.
-VALID_MODES = frozenset({"hourly", "full", "manual"})
+# Default `source` when neither the event nor BYOR_TRIGGER_SOURCE supplies one.
+# Should be unusual enough to spot in logs but bounded so it never explodes
+# CloudWatch metric dimensionality.
+DEFAULT_TRIGGER_SOURCE = "unknown"
