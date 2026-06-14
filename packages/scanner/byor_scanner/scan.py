@@ -90,6 +90,9 @@ class ScanRequest:
     # from. Emitted as the `registry` metric dimension so scan/skip rates are
     # separable per registry. Bounded low-cardinality (set by addRegistry).
     registry_id: str = "default"
+    # Optional scan type (e.g. "canary"). When set, findings are written under
+    # findings/<type>/<image>/... to isolate test output from production.
+    source_type: str = ""
 
 
 def _emit_outcome(name: str, source: str) -> None:
@@ -202,7 +205,9 @@ def scan_image(req: ScanRequest) -> dict[str, Any]:
         findings = call_scan_sbom(sbom)
 
         # Stage 6: write findings
-        findings_key = _write_findings(req.bucket, req.image, ref, findings)
+        findings_key = _write_findings(
+            req.bucket, req.image, ref, findings, req.source_type
+        )
         region = os.environ.get("AWS_REGION", "")
         findings_url = (
             f"https://{region}.console.aws.amazon.com/s3/object/"
@@ -376,7 +381,7 @@ def _cache_sbom(bucket: str, key: str, sbom: dict[str, Any]) -> None:
 
 @tracer.start_as_current_span("DeliverFindings")
 def _write_findings(
-    bucket: str, image: str, ref: str, findings: dict[str, Any]
+    bucket: str, image: str, ref: str, findings: dict[str, Any], source_type: str = ""
 ) -> str:
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     short_ref = ref.replace("sha256:", "")[:12]
@@ -384,7 +389,8 @@ def _write_findings(
     # serving the same image name + digest write under the same prefix
     # (distinguished only by timestamp). Acceptable today; if registries must be
     # kept separate, prefix the key with the registry id.
-    findings_key = f"findings/{image}/{short_ref}/{timestamp}.json"
+    prefix = f"findings/{source_type}/" if source_type else "findings/"
+    findings_key = f"{prefix}{image}/{short_ref}/{timestamp}.json"
     body = json.dumps(findings, default=str)
     if len(body.encode()) > MAX_FINDINGS_BYTES:
         raise ScanError(

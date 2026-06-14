@@ -207,6 +207,7 @@ export class ScannerObservability extends Construct {
           actions: [
             'application-signals:StartDiscovery',
             'iam:CreateServiceLinkedRole',
+            'cloudtrail:CreateServiceLinkedChannel',
           ],
           resources: ['*'],
         }),

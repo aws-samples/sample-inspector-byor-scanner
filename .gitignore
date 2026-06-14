@@ -15,7 +15,7 @@ coverage/
 reports/
 
 # CDK
-cdk.out/
+cdk.out*/
 
 # SAM
 .aws-sam/

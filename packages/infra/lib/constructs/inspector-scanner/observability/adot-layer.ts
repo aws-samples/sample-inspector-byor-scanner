@@ -16,6 +16,8 @@ import { Construct } from 'constructs';
 export const ADOT_PYTHON_LAYER_ARNS: Readonly<Record<string, string>> = {
   'us-west-2':
     'arn:aws:lambda:us-west-2:615299751070:layer:AWSOpenTelemetryDistroPython:29',
+  'us-west-1':
+    'arn:aws:lambda:us-west-1:615299751070:layer:AWSOpenTelemetryDistroPython:29',
   'us-east-1':
     'arn:aws:lambda:us-east-1:615299751070:layer:AWSOpenTelemetryDistroPython:25',
 };

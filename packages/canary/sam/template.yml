@@ -5,28 +5,40 @@ Description: Local-debug harness for the Inspector BYOR Scanner canary.
 # Per the AWS Synthetics local-debug guide, the canary runs as a Lambda
 # function. The Synthetics runtime is supplied via a Lambda layer; the
 # bundled handler lives at nodejs/node_modules/index.js inside the asset.
-# Update the layer ARN below if you target a different region.
 
 Parameters:
-  PusherFunctionName:
+  ManifestBucket:
     Type: String
-    Description: Name of the Pusher Lambda the canary should invoke.
+    Description: S3 bucket the canary writes manifests to (triggers discovery).
   FindingsBucket:
     Type: String
     Description: S3 bucket the Scanner Lambda writes findings to.
+  TestImage:
+    Type: String
+    Default: "alpine"
+    Description: Image name the canary writes into the manifest.
+  TestImageTag:
+    Type: String
+    Default: "3.19"
+    Description: Image tag/ref the canary writes into the manifest.
+  AwsRegion:
+    Type: String
+    Default: "us-west-2"
+    Description: AWS region for SDK clients inside the canary.
 
 Resources:
   Canary:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: ../dist
+      CodeUri: ../dist/nodejs/node_modules
       Handler: cw-synthetics.handler
       Runtime: nodejs22.x
       Timeout: 900
       MemorySize: 1024
       Environment:
         Variables:
-          PUSHER_FUNCTION_NAME: !Ref PusherFunctionName
+          MANIFEST_BUCKET: !Ref ManifestBucket
           FINDINGS_BUCKET: !Ref FindingsBucket
-      Layers:
-        - arn:aws:lambda:us-west-2:760325925879:layer:Synthetics:82
+          TEST_IMAGE: !Ref TestImage
+          TEST_IMAGE_TAG: !Ref TestImageTag
+          AWS_REGION: !Ref AwsRegion
