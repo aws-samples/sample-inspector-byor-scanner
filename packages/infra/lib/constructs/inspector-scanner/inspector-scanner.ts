@@ -24,6 +24,7 @@ import {
   ITrigger,
   TriggerAttachment,
 } from './triggers';
+import { ScannerCanary, ScannerCanaryProps } from '@constructs/canary';
 
 /**
  * Path to the scanner Python package (`packages/scanner`). Resolved once at
@@ -100,6 +101,14 @@ export interface RegistryAttachment {
   readonly auth: IRepositoryAuth;
   /** Whether TLS verification is skipped for this registry (test-only). */
   readonly insecureTlsVerify: boolean;
+}
+
+/**
+ * Props for {@link InspectorScanner.addCanary}.
+ */
+export interface AddCanaryProps extends Omit<ScannerCanaryProps, 'findingsBucket'> {
+  /** Bucket the canary drops its trigger manifest into. */
+  readonly manifestBucket: s3.IBucket;
 }
 
 /**
@@ -642,6 +651,30 @@ export class InspectorScanner extends Construct {
    */
   public addAlarmAction(action: cloudwatch.IAlarmAction): void {
     this.observability.addAlarmAction(action);
+  }
+
+  /**
+   * Attach a CloudWatch Synthetics canary that validates the scan pipeline
+   * end-to-end. Puts a manifest into `manifestBucket`, then polls
+   * `findingsBucket` for new findings.
+   *
+   * Can be called multiple times with different ids to test different images.
+   */
+  public addCanary(
+    id: string,
+    props: AddCanaryProps,
+  ): ScannerCanary {
+    const canary = new ScannerCanary(this, `Canary${id}`, {
+      ...props,
+      findingsBucket: this.findingsBucket,
+    });
+
+    // Ensure VPC-attached discovery Lambdas are fully initialized before the canary starts.
+    for (const [, provider] of this.discoveryProviderMap) {
+      canary.node.addDependency(provider.discoveryFunction);
+    }
+
+    return canary;
   }
 
   /**

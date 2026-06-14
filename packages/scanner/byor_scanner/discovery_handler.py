@@ -233,6 +233,9 @@ def _message_body(
     registry = img.get("registry")
     if registry:
         body["registry"] = registry
+    source_type = img.get("sourceType")
+    if source_type:
+        body["sourceType"] = source_type
     return body
 
 

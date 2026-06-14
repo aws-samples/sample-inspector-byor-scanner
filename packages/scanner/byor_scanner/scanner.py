@@ -231,6 +231,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG
                     bucket=FINDINGS_BUCKET,
                     source=source,
                     registry_id=registry_id,
+                    source_type=body.get("sourceType", ""),
                 )
             )
 
