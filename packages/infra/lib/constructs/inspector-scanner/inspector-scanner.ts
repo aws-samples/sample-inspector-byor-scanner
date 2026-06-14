@@ -669,6 +669,12 @@ export class InspectorScanner extends Construct {
       findingsBucket: this.findingsBucket,
     });
 
+    // Auto-delete canary findings after 3 days to avoid accumulation.
+    (this.findingsBucket as s3.Bucket).addLifecycleRule({
+      prefix: 'findings/canary/',
+      expiration: Duration.days(3),
+    });
+
     // Ensure VPC-attached discovery Lambdas are fully initialized before the canary starts.
     for (const [, provider] of this.discoveryProviderMap) {
       canary.node.addDependency(provider.discoveryFunction);

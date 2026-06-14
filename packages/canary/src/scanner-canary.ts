@@ -18,7 +18,7 @@ export const handler = async (): Promise<void> => {
   const startTime = new Date();
 
   await synthetics.executeStep('triggerScan', async () => {
-    const manifestKey = `canary/${startTime.toISOString().replace(/[:.]/g, '-')}-${Math.random().toString(36).slice(2, 8)}.json`;
+    const manifestKey = `canary/${startTime.toISOString().replace(/[:.]/g, '-')}.json`;
     const manifest = [{ image: TEST_IMAGE, ref: TEST_IMAGE_TAG, sourceType: 'canary' }];
 
     await s3.send(
