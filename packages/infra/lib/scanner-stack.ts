@@ -157,7 +157,6 @@ export class ScannerStack extends Stack {
     // SLOs (+ per-operation alarms) and the CloudWatch dashboard.
     new Observability(this, 'Observability', {
       scannerFunction: this.scannerFunction,
-      discoveryFunction: this.discoveryFunction,
       queue: this.scanQueue,
       scannerTimeout,
       discoveryTimeout,

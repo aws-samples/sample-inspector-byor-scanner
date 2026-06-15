@@ -113,3 +113,30 @@ def classify_pull_error(stderr: str) -> str:
 def classify_sbomgen_error(stderr: str) -> str:
     """Classify an ``inspector-sbomgen`` failure from its stderr output."""
     return _classify(stderr, _SBOMGEN_PATTERNS, SBOMGEN_FAILED)
+
+
+# --- Stage classification (maps error codes to pipeline stages for alarms) ---
+
+_ERROR_TO_STAGE: dict[str, str] = {
+    AUTH_FAILED: "Inspect",
+    INSPECT_FAILED: "Inspect",
+    INSPECT_TIMEOUT: "Inspect",
+    IMAGE_NOT_FOUND: "Inspect",
+    PULL_FAILED: "Pull",
+    PULL_TIMEOUT: "Pull",
+    DISK_FULL: "Pull",
+    SBOMGEN_FAILED: "SbomGen",
+    SBOMGEN_TIMEOUT: "SbomGen",
+    UNSUPPORTED_OS: "SbomGen",
+    UNSUPPORTED_FORMAT: "SbomGen",
+    SCANSBOM_FAILED: "ScanSbom",
+    SCANSBOM_THROTTLED: "ScanSbom",
+    SCANSBOM_VALIDATION: "ScanSbom",
+    S3_WRITE_FAILED: "Delivery",
+    FINDINGS_TOO_LARGE: "Delivery",
+}
+
+
+def classify_stage(error_code: str) -> str:
+    """Map an error code to its pipeline stage for per-operation alarms."""
+    return _ERROR_TO_STAGE.get(error_code, "Unknown")

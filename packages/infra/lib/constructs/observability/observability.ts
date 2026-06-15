@@ -1,4 +1,4 @@
-import { Duration } from 'aws-cdk-lib';
+import { Duration, Stack } from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as sns from 'aws-cdk-lib/aws-sns';
@@ -12,9 +12,6 @@ const PERIOD = Duration.minutes(5);
 export interface ObservabilityProps {
   /** Scanner Lambda — its log group backs the Logs Insights widgets. */
   readonly scannerFunction: lambda.IFunction;
-
-  /** Discovery Lambda — used for the Application Signals Operation dimension. */
-  readonly discoveryFunction: lambda.IFunction;
 
   /** Scan queue — passed through to the scan-freshness SLO. */
   readonly queue: sqs.IQueue;
@@ -49,13 +46,11 @@ export class Observability extends Construct {
       scannerTimeout: props.scannerTimeout,
       discoveryTimeout: props.discoveryTimeout,
       alarmTopic: props.alarmTopic,
-      scannerFunctionName: props.scannerFunction.functionName,
-      discoveryFunctionName: props.discoveryFunction.functionName,
     });
 
     const logGroup = `/aws/lambda/${props.scannerFunction.functionName}`;
     const dashboard = new cloudwatch.Dashboard(this, 'Dashboard', {
-      dashboardName: 'BYORScan',
+      dashboardName: `BYORScan-${Stack.of(this).region}`,
     });
 
     // ─── Logs Insights widgets ─────────────────────────────────────────
@@ -82,7 +77,7 @@ export class Observability extends Construct {
           'filter outcome = "success"',
           'stats latest(ref) as Ref, latest(findingsCritical) as Critical, latest(findingsHigh) as High, latest(findingsMedium) as Medium, latest(findingsLow) as Low, latest(findingsTotal) as Total, latest(digest) as Digest, latest(findingsKey) as FindingsURL by image',
           'sort Critical desc',
-          'limit 50',
+          'limit 1000',
         ],
         width: 24,
         height: 8,
@@ -91,14 +86,14 @@ export class Observability extends Construct {
 
     dashboard.addWidgets(
       new cloudwatch.LogQueryWidget({
-        title: 'Repeatedly Failed Images',
+        title: 'Recent Failed Images',
         logGroupNames: [logGroup],
         // Failures log "Scan failed" with an errorCode (no outcome field).
         queryLines: [
           'filter message = "Scan failed"',
           'stats count(*) as failCount, latest(errorCode) as lastError, latest(traceUrl) as Trace, max(@timestamp) as lastFailed by image, ref',
-          'sort failCount desc',
-          'limit 25',
+          'sort lastFailed desc',
+          'limit 50',
         ],
         width: 24,
         height: 6,
@@ -168,14 +163,12 @@ export class Observability extends Construct {
     dashboard.addWidgets(
       new cloudwatch.GraphWidget({
         title: 'Discovery Volume',
-        // ImagesEnqueued carries both `service` and `mode` dimensions, so sum
-        // every matching series to get total enqueued across modes.
         left: [
           new cloudwatch.MathExpression({
             expression:
-              'SUM(SEARCH(\'{BYORScan,mode,service} MetricName="ImagesEnqueued"\', \'Sum\', 300))',
+              'SUM(SEARCH(\'{BYORScan,source,service} MetricName="ImagesEnqueued"\', \'Sum\', 300))',
             usingMetrics: {},
-            label: 'Enqueued (all modes)',
+            label: 'Enqueued (all sources)',
             period: PERIOD,
           }),
         ],

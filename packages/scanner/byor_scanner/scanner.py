@@ -30,7 +30,7 @@ from byor_scanner.constants import (
     METRIC_NAMESPACE,
     SERVICE_SCANNER,
 )
-from byor_scanner.errors import ScanError
+from byor_scanner.errors import ScanError, classify_stage
 from byor_scanner.plugin_loader import load_plugin
 from byor_scanner.protocols import AuthProvider
 from byor_scanner.scan import ScanRequest, ensure_policy_json, scan_image
@@ -78,11 +78,12 @@ def _trace_url() -> str:
 
 
 def _record_failure(error_code: str, source: str) -> None:
-    """Emit ImagesFailed three ways.
+    """Emit ImagesFailed four ways.
 
     1. Aggregate (no extra dims) ─ keeps the existing service-level series.
-    2. Dimensioned by ``errorCode`` ─ drives the per-operation alarms.
-    3. Dimensioned by ``source``   ─ per-trigger failure rate on dashboards.
+    2. Dimensioned by ``errorCode`` ─ dashboard drill-down.
+    3. Dimensioned by ``stage``     ─ per-operation alarms.
+    4. Dimensioned by ``source``    ─ per-trigger failure rate on dashboards.
 
     The dimensioned copies are emitted via ``single_metric`` so the
     dimensions don't bleed onto the other metrics emitted during this
@@ -97,6 +98,13 @@ def _record_failure(error_code: str, source: str) -> None:
         value=1,
     ) as metric:
         metric.add_dimension(name="errorCode", value=error_code)
+    with single_metric(
+        namespace=METRIC_NAMESPACE,
+        name="ImagesFailed",
+        unit=MetricUnit.Count,
+        value=1,
+    ) as metric:
+        metric.add_dimension(name="stage", value=classify_stage(error_code))
     with single_metric(
         namespace=METRIC_NAMESPACE,
         name="ImagesFailed",
