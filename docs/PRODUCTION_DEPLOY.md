@@ -23,7 +23,7 @@ A serverless container vulnerability scanner that:
   - Your registry hostname
   - AWS service endpoints (S3, SQS, Secrets Manager, Inspector, CloudWatch)
 - An mTLS client cert + key + CA bundle that your registry accepts
-- CDK CLI v2.258+, Node 20+, Docker (for `cdk synth` to bundle the Python
+- CDK CLI v2.1126+, Node 22+, Docker (for `cdk synth` to bundle the Python
   Lambdas via `aws-lambda-python-alpha`)
 
 ## Step 1 — Stage the mTLS material in Secrets Manager
