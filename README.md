@@ -113,22 +113,31 @@ The test registry's NAT gateway is the only ongoing cost (~$33/mo). Don't leave 
 
 ## Production deploy
 
-The default `bin/app.ts` wires up the **sample** stacks (TestingStack + ScannerStack). For a production deploy you typically:
+The default `bin/app.ts` wires up the **sample** stacks (`BinaryStack` + `TestingStack` + `ScannerStack`). `TestingStack` is what provisions the throwaway VPC, self-signed certs, and test registry — for production you skip it and bring your own three resources:
 
-1. Skip `TestingStack` entirely — bring your own VPC, your own registry, your own pre-existing Secrets Manager secret containing `{ca, cert, key}`.
-2. Pass those resources to `ScannerStack` directly:
+1. **Skip `TestingStack`** — bring your own VPC, your own registry hostname, and your own pre-existing Secrets Manager secret containing `{ca, cert, key}` (the shape [`MtlsRepositoryAuth`](packages/infra/lib/constructs/inspector-scanner/auth/) reads).
+2. **Pass those resources to `ScannerStack` directly.** Replace the `TestingStack` block in `bin/app.ts` with lookups for your own resources:
    ```ts
+   import * as ec2 from 'aws-cdk-lib/aws-ec2';
+   import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+
+   const binaries = new BinaryStack(app, 'BinaryStack', { env });
+
    new ScannerStack(app, 'ScannerStack', {
-     vpc: ec2.Vpc.fromLookup(scope, 'Vpc', { vpcId: 'vpc-...' }),
+     env,
+     // Your VPC — needs private subnets + egress to your registry and AWS APIs.
+     vpc: ec2.Vpc.fromLookup(app, 'Vpc', { vpcId: 'vpc-...' }),
+     // Your registry hostname — host only, no scheme, no path.
      registryUrl: 'registry.internal.example.com',
-     mtlsSecret: secretsmanager.Secret.fromSecretNameV2(scope, 'MtlsCerts', 'scanner/mtls'),
+     // Your pre-existing secret holding the mTLS material ({ca, cert, key} PEMs).
+     mtlsSecret: secretsmanager.Secret.fromSecretNameV2(app, 'MtlsCerts', 'scanner/mtls'),
      binaryLayer: binaries.binaryLayer,
-     enableSchedules: true,            // production wants the cron
-     authProvider: 'my_custom_pkg.MyAuth',          // optional: custom plugin
-     pluginLayerArn: 'arn:aws:lambda:...:layer:...', // your plugin layer
    });
    ```
+   `vpc`, `registryUrl`, `mtlsSecret`, and `binaryLayer` are the required props. To target a non-mTLS registry, pass a custom `repositoryAuth`; to change how scans fire (scheduled vs. the default S3 manifest), pass a `trigger`. See [`ScannerStackProps`](packages/infra/lib/scanner-stack.ts) for all options.
 3. The same `BinaryStack` is reused; you do not need a separate testing flavor.
+
+For a full step-by-step runbook — staging the mTLS secret, a dedicated `bin/prod.ts` entry point, triggering the first scan, and common failure modes — see [`docs/PRODUCTION_DEPLOY.md`](docs/PRODUCTION_DEPLOY.md).
 
 ## Observability
 
