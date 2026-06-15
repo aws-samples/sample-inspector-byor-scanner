@@ -170,19 +170,15 @@ EMF metrics (Powertools) under namespace `BYORScan`, carrying a `service` dimens
 
 ### Service Level Objectives
 
-Seven [Application Signals](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Application-Signals.html) SLOs. Availability and latency use **metric-based SLIs** over the `ApplicationSignals` `Latency`/`Fault` metrics (read as plain CloudWatch metrics, not service-bound `keyAttributes` SLIs), so every SLO **creates on the first deploy** — before the service has been discovered. Availability is the non-fault request ratio `(Latency SampleCount − Fault) / Latency SampleCount`; scan/discovery failures are marked as server faults (`http.status_code=500`) so they count against it.
+Three [Application Signals](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Application-Signals.html) SLOs are deployed via CDK for system-level coverage. Scanner and Discovery availability/latency SLOs are managed directly by Application Signals (SLO-by-service) in the console — they bind automatically once the ADOT-instrumented Lambdas are discovered.
 
 | SLO | SLI | Attainment goal |
 |-----|-----|-----------------|
-| `byor-scanner-availability` | non-fault request ratio | 99.9% |
-| `byor-scanner-latency` | p99 < 80% of scanner timeout | 99.9% |
-| `byor-discovery-availability` | non-fault request ratio | 99.9% |
-| `byor-discovery-latency` | p99 < 80% of discovery timeout | 99.9% |
 | `byor-scan-freshness` | queue drains within 14h | 99% |
 | `byor-new-image-coverage` | p99 scan duration < 60 min | 99% |
 | `byor-image-compatibility` | scannable (not skipped) ≥ 95% | 95% |
 
-`byor-scan-freshness` and `byor-discovery-availability` are attainment-only (no burn-rate alarm), since the operational alarms above already page on those signals.
+Scanner and Discovery availability/latency SLOs are managed directly by Application Signals (SLO-by-service) and do not require explicit CDK definitions. `byor-scan-freshness` is attainment-only (no burn-rate alarm), since the operational QueueAgeAlarm already pages on that signal.
 
 ### Dashboard
 

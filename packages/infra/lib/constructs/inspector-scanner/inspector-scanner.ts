@@ -57,9 +57,9 @@ const ENV_TRIGGER_SOURCE = 'BYOR_TRIGGER_SOURCE';
  */
 const ADOT_LAYER_ARNS: Record<string, string> = {
   'us-west-2':
-    'arn:aws:lambda:us-west-2:615299751070:layer:AWSOpenTelemetryDistroPython:32',
+    'arn:aws:lambda:us-west-2:615299751070:layer:AWSOpenTelemetryDistroPython:29',
   'us-east-1':
-    'arn:aws:lambda:us-east-1:615299751070:layer:AWSOpenTelemetryDistroPython:32',
+    'arn:aws:lambda:us-east-1:615299751070:layer:AWSOpenTelemetryDistroPython:25',
 };
 
 export interface InspectorScannerProps {
@@ -230,6 +230,7 @@ export class InspectorScanner extends Construct {
       logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         ...commonEnv,
+        OTEL_SERVICE_NAME: 'byor-scanner',
         [ENV_REGISTRY_URL]: props.registryUrl,
         [ENV_FINDINGS_BUCKET]: this.findingsBucket.bucketName,
         [ENV_AUTH_PROVIDER]: props.repositoryAuth.dottedPath,
@@ -287,6 +288,7 @@ export class InspectorScanner extends Construct {
       logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         ...commonEnv,
+        OTEL_SERVICE_NAME: 'byor-discovery',
         [ENV_QUEUE_URL]: this.scanQueue.queueUrl,
         [ENV_DISCOVERY_BACKEND]: props.trigger.plugin.dottedPath,
         [ENV_TRIGGER_SOURCE]: props.trigger.source,

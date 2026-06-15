@@ -6,22 +6,15 @@ import { METRIC_NAMESPACE } from './constants';
 import { MetricAlarm } from './metric-alarm';
 
 /**
- * Scanner error codes that warrant a dedicated per-operation alarm. These
- * are the operational failures (registry/network/Inspector/delivery) where a
- * sustained rate signals something is wrong with the pipeline rather than a
- * single bad image. Codes raised on the `ImagesFailed` metric's `errorCode`
- * dimension by the scanner Lambda (see byor_scanner/scanner.py + errors.py).
+ * Pipeline stages that get a dedicated alarm. Each maps to one or more
+ * error codes emitted by the scanner Lambda on the `stage` dimension.
  */
-const SCANNER_ALARM_CODES: ReadonlyArray<readonly [string, string]> = [
-  ['AuthFailures', 'AUTH_FAILED'],
-  ['ScanSbomValidation', 'SCANSBOM_VALIDATION'],
-  ['S3WriteFailures', 'S3_WRITE_FAILED'],
-  ['InspectFailures', 'INSPECT_FAILED'],
-  ['PullFailures', 'PULL_FAILED'],
-  ['PullTimeouts', 'PULL_TIMEOUT'],
-  ['SbomgenFailures', 'SBOMGEN_FAILED'],
-  ['ScanSbomFailures', 'SCANSBOM_FAILED'],
-  ['ScanSbomThrottled', 'SCANSBOM_THROTTLED'],
+const STAGE_ALARMS: ReadonlyArray<readonly [string, string]> = [
+  ['Inspect', 'Inspect'],
+  ['Pull', 'Pull'],
+  ['SbomGen', 'SbomGen'],
+  ['ScanSbom', 'ScanSbom'],
+  ['Delivery', 'Delivery'],
 ];
 
 export interface ScannerAlarmsProps {
@@ -30,25 +23,23 @@ export interface ScannerAlarmsProps {
 }
 
 /**
- * Per-operation scanner alarms. Each fires when its `errorCode` appears on
- * `ImagesFailed` at least twice in 3 of 5 five-minute periods — enough to
- * suppress single-image flakiness while catching a sustained failure mode.
- *
- * These complement the stack's three coarse operational alarms (DLQ depth,
- * queue age, discovery failures); they do not duplicate them.
+ * Per-operation scanner alarms — one per pipeline stage. Each fires when
+ * `ImagesFailed` with that stage dimension appears at least twice in 3 of
+ * 5 five-minute periods, suppressing single-image flakiness while catching
+ * sustained failure modes.
  */
 export class ScannerAlarms extends Construct {
   constructor(scope: Construct, id: string, props: ScannerAlarmsProps) {
     super(scope, id);
 
-    for (const [name, code] of SCANNER_ALARM_CODES) {
+    for (const [name, stage] of STAGE_ALARMS) {
       new MetricAlarm(this, name, {
-        alarmName: `byor-scanner-${code}`,
-        alarmDescription: `${code} errors detected on the scanner`,
+        alarmName: `byor-scanner-${stage}`,
+        alarmDescription: `${stage} stage failures detected on the scanner`,
         metric: new cloudwatch.Metric({
           namespace: METRIC_NAMESPACE,
           metricName: 'ImagesFailed',
-          dimensionsMap: { errorCode: code },
+          dimensionsMap: { stage },
           statistic: cloudwatch.Stats.SUM,
           period: Duration.minutes(5),
         }),
