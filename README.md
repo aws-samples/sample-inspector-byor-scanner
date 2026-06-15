@@ -154,3 +154,8 @@ See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for the respons
 ## License
 
 MIT-0. See [LICENSE](LICENSE).
+
+This project bundles or downloads third-party software (skopeo, inspector-sbomgen)
+into a shared Lambda Layer at synth time. See
+[THIRD-PARTY-LICENSES](THIRD-PARTY-LICENSES.md) for their versions, sources, and
+license texts.
