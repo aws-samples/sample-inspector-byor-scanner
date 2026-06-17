@@ -24,17 +24,21 @@ ENV_DISCOVERY_BACKEND = "BYOR_DISCOVERY_BACKEND"
 ENV_MTLS_SECRET_NAME = "BYOR_MTLS_SECRET_NAME"
 ENV_MAX_DISCOVERED = "BYOR_MAX_DISCOVERED"
 ENV_REGISTRY_URL = "BYOR_REGISTRY_URL"
+# JSON map of registry id -> {url, authProvider, authEnv, insecureTlsVerify}.
+# Set by the CDK construct from accumulated addRegistry() calls (a Lazy token).
+# When absent, config.py synthesizes a single "default" entry from
+# ENV_REGISTRY_URL / ENV_AUTH_PROVIDER / ENV_MTLS_SECRET_NAME.
+ENV_REGISTRIES = "BYOR_REGISTRIES"
 ENV_FINDINGS_BUCKET = "BYOR_FINDINGS_BUCKET"
 ENV_QUEUE_URL = "BYOR_QUEUE_URL"
 # Trigger logical id, set by the trigger construct on the discovery Lambda.
 # Used as the default `source` value when an event does not carry one.
 ENV_TRIGGER_SOURCE = "BYOR_TRIGGER_SOURCE"
-# Manifest bucket name, set by S3ManifestTrigger for the S3ManifestDiscovery
-# plugin. The plugin reads the bucket from S3 event Records, so this is only
-# used for log context / direct-invoke testing.
+# Manifest bucket name, set by S3ManifestDiscoveryProvider (the provider that
+# owns the bucket). The backend reads the bucket from S3 event Records, so this
+# is only used for log context / direct-invoke testing.
 ENV_MANIFEST_BUCKET = "BYOR_MANIFEST_BUCKET"
 ENV_MAX_IMAGE_SIZE_GB = "BYOR_MAX_IMAGE_SIZE_GB"
-ENV_TLS_VERIFY = "BYOR_TLS_VERIFY"
 ENV_INSPECT_TIMEOUT = "BYOR_INSPECT_TIMEOUT"
 ENV_COPY_TIMEOUT = "BYOR_COPY_TIMEOUT"
 ENV_SBOMGEN_TIMEOUT = "BYOR_SBOMGEN_TIMEOUT"

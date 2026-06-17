@@ -26,35 +26,30 @@ logger = Logger(service=SERVICE_SCANNER)
 T = TypeVar("T")
 
 
-def load_plugin(env_var: str, protocol: type[T], default: str) -> T:
-    """Resolve ``env_var`` to a class, instantiate it, and protocol-check.
+def load_plugin_from_path(dotted_path: str, protocol: type[T]) -> T:
+    """Resolve a dotted path to a class, instantiate it, and protocol-check.
 
-    :param env_var: Name of the environment variable holding the dotted
-        module path (``"module.path.ClassName"``).
+    Unlike :func:`load_plugin`, this performs no environment lookup ─ the
+    caller supplies the dotted path directly (e.g. a per-registry
+    ``authProvider`` from ``BYOR_REGISTRIES``).
+
+    :param dotted_path: ``"module.path.ClassName"``.
     :param protocol: Protocol class to validate against. Must be
         ``@runtime_checkable``.
-    :param default: Dotted path used when ``env_var`` is unset.
     :returns: An instance of the loaded class.
     :raises ImportError: invalid path or class missing.
     :raises TypeError: loaded class does not implement the protocol.
     """
-    module_path = os.environ.get(env_var, default)
-
-    if "." not in module_path:
+    if "." not in dotted_path:
         raise ImportError(
-            f"Invalid plugin path {module_path!r} from {env_var}: "
-            "must be 'module.path.ClassName'"
+            f"Invalid plugin path {dotted_path!r}: must be 'module.path.ClassName'"
         )
 
-    module_name, class_name = module_path.rsplit(".", 1)
+    module_name, class_name = dotted_path.rsplit(".", 1)
 
     logger.info(
         "Loading plugin",
-        extra={
-            "envVar": env_var,
-            "moduleName": module_name,
-            "className": class_name,
-        },
+        extra={"moduleName": module_name, "className": class_name},
     )
 
     module = importlib.import_module(module_name)
@@ -71,6 +66,21 @@ def load_plugin(env_var: str, protocol: type[T], default: str) -> T:
         )
 
     return instance
+
+
+def load_plugin(env_var: str, protocol: type[T], default: str) -> T:
+    """Resolve ``env_var`` to a class, instantiate it, and protocol-check.
+
+    :param env_var: Name of the environment variable holding the dotted
+        module path (``"module.path.ClassName"``).
+    :param protocol: Protocol class to validate against. Must be
+        ``@runtime_checkable``.
+    :param default: Dotted path used when ``env_var`` is unset.
+    :returns: An instance of the loaded class.
+    :raises ImportError: invalid path or class missing.
+    :raises TypeError: loaded class does not implement the protocol.
+    """
+    return load_plugin_from_path(os.environ.get(env_var, default), protocol)
 
 
 def _protocol_methods(protocol: type[Any]) -> list[str]:

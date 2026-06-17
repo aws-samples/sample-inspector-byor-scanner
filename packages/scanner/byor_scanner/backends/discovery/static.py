@@ -1,8 +1,8 @@
 """Static discovery backend.
 
 Returns the ``images`` list from the invocation event payload verbatim ─
-no external query. The default plugin paired with ``ManualTrigger`` and
-the simplest pairing for canaries / on-demand scans.
+no external query. Used for direct-invoke / canary / on-demand scans where
+the caller supplies the image list in the event payload.
 
 For real fleet discovery, ship a custom backend (see
 :class:`~byor_scanner.protocols.DiscoveryBackend`) and select it via

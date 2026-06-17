@@ -41,7 +41,7 @@ def run(
         # $HOME/.local which is read-only.
         "HOME": "/tmp",
         "TMPDIR": "/tmp",
-        # Preserve PATH and any AWS_ creds that the AWS SDK propagates.
+        # A minimal, credential-free env for the external binaries.
         **_inherited_env(),
     }
 
@@ -65,9 +65,14 @@ def run(
 
 
 def _inherited_env() -> dict[str, str]:
-    """Pass through env vars the runtime needs, but not the ones we set."""
+    """Minimal, credential-free env for skopeo / inspector-sbomgen.
+
+    A strict allowlist, NOT a broad ``AWS_*`` passthrough: these binaries parse
+    untrusted registry content and auth via CLI args, so they must not be handed
+    the execution role's AWS credentials. ``BYOR_*`` is read in-process, so it's
+    omitted too.
+    """
     import os
 
     keep = {"PATH", "AWS_REGION", "AWS_DEFAULT_REGION", "_X_AMZN_TRACE_ID"}
-    keep |= {k for k in os.environ if k.startswith(("AWS_", "BYOR_"))}
     return {k: v for k, v in os.environ.items() if k in keep}

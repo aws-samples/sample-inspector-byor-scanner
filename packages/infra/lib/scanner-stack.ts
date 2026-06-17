@@ -9,11 +9,14 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import {
-  IDiscoveryTrigger,
   InspectorScanner,
   IRepositoryAuth,
   MtlsRepositoryAuth,
+  NoAuth,
+  S3ManifestDiscoveryProvider,
   S3ManifestTrigger,
+  ScheduledStaticDiscoveryProvider,
+  ScheduledTrigger,
 } from '@constructs/inspector-scanner';
 import { Observability } from './constructs/observability';
 
@@ -23,36 +26,23 @@ export interface ScannerStackProps extends StackProps {
 
   /**
    * Hostname of the BYO container registry (e.g. ``registry.example.com``).
-   * The scanner pulls images from ``${registryUrl}/<image>:<tag>``.
+   * Attached to the scanner as the ``default`` registry.
    */
   readonly registryUrl: string;
 
   /**
-   * Layer holding ``skopeo`` and ``inspector-sbomgen`` at ``/opt/bin/``.
-   * Provided by ``BinaryStack``; reused by the registry seeder so all
-   * three Lambdas (scanner, discovery, seeder) run identical binaries.
-   */
-  readonly binaryLayer: lambda.ILayerVersion;
-
-  /**
    * Secret holding the mTLS client material the scanner Lambda uses to
-   * authenticate to the registry. Used as the default
+   * authenticate to the registry. Used to build the default
    * {@link MtlsRepositoryAuth} when `repositoryAuth` is not supplied.
    */
   readonly mtlsSecret: secretsmanager.ISecret;
 
   /**
-   * Repository auth seam. Defaults to {@link MtlsRepositoryAuth} bound to
-   * `mtlsSecret`. Override for non-mTLS registries.
+   * Repository auth for the ``default`` registry. Defaults to
+   * {@link MtlsRepositoryAuth} bound to `mtlsSecret`. Override for non-mTLS
+   * registries.
    */
   readonly repositoryAuth?: IRepositoryAuth;
-
-  /**
-   * Optional trigger override. Leave unset for the sample's default
-   * (`S3ManifestTrigger` named `'Manifest'`); override to wire a
-   * `ScheduledTrigger`, `ManualTrigger`, or a custom one.
-   */
-  readonly trigger?: IDiscoveryTrigger;
 
   /** Optional KMS CMK for the findings bucket. Defaults to S3-managed (SSE-S3). */
   readonly findingsBucketKey?: kms.IKey;
@@ -72,12 +62,13 @@ export interface ScannerStackProps extends StackProps {
 /**
  * Sample-stack wrapper around {@link InspectorScanner}.
  *
- * Picks defaults appropriate for the sample (mTLS auth from the test
- * registry's secret; S3-manifest trigger so a customer can drop a JSON and
- * watch the scanner fire). Production deploys can either:
- *  - reuse this stack and pass `trigger` / `repositoryAuth` explicitly, or
- *  - bypass it and instantiate `InspectorScanner` directly inside their own
- *    stack/app.
+ * Wires the methodful L3 to a single-registry, S3-manifest-driven sample
+ * deployment: one mTLS registry (``default``) from the test secret, an
+ * {@link S3ManifestDiscoveryProvider} discovery provider, and an
+ * {@link S3ManifestTrigger} so dropping a JSON manifest into the bucket fires a
+ * scan. Production deploys can either reuse this stack with `registryUrl` /
+ * `repositoryAuth`, or bypass it and drive {@link InspectorScanner} directly
+ * with their own `addRegistry` / `addDiscoveryProvider` / `addTrigger` calls.
  */
 export class ScannerStack extends Stack {
   public readonly findingsBucket: s3.IBucket;
@@ -96,19 +87,10 @@ export class ScannerStack extends Stack {
       props.repositoryAuth ??
       new MtlsRepositoryAuth(this, 'RepositoryAuth', { secret: props.mtlsSecret });
 
-    // Sample default: an S3 manifest bucket. Drop a JSON array of
-    // {image, ref} into the bucket and the scan fires. Override via
-    // `props.trigger` for scheduled or manual deploys.
-    const trigger =
-      props.trigger ??
-      new S3ManifestTrigger(this, 'Trigger', { source: 'Manifest' });
-
+    // Foundational resources only ─ registries / discovery / triggers are
+    // attached below via the methodful surface.
     const inspector = new InspectorScanner(this, 'Inspector', {
       vpc: props.vpc,
-      registryUrl: props.registryUrl,
-      binaryLayer: props.binaryLayer,
-      repositoryAuth,
-      trigger,
       findingsBucketKey: props.findingsBucketKey,
       scannerTimeout,
       scannerMemoryMiB: props.scannerMemoryMiB,
@@ -117,20 +99,72 @@ export class ScannerStack extends Stack {
       sqsMaxConcurrency: props.sqsMaxConcurrency,
     });
 
+    // The single sample registry, attached as ``default`` so messages without
+    // an explicit registry id route to it.
+    inspector.addRegistry('default', {
+      url: props.registryUrl,
+      auth: repositoryAuth,
+    });
+
+    // A public registry (Docker Hub) needing no auth ─ demonstrates
+    // multi-registry with a second, different auth provider. Images tagged
+    // `registry: "public"` pull from here (e.g. `library/alpine:3.19`).
+    inspector.addRegistry('public', {
+      url: 'docker.io',
+      auth: new NoAuth(),
+      insecureTlsVerify: false,
+    });
+
+    // S3-manifest discovery: drop a JSON array of {image, ref} into the bucket
+    // to fire a scan. The provider owns the bucket and the trigger attaches its
+    // notification to that same bucket, so they can't diverge.
+    const manifestDiscovery = new S3ManifestDiscoveryProvider(this, 'Manifest', {});
+    const provider = inspector.addDiscoveryProvider('manifest', manifestDiscovery);
+
+    inspector.addTrigger(
+      'manifest',
+      new S3ManifestTrigger(this, 'Trigger', {
+        discovery: provider,
+        bucket: manifestDiscovery.bucket,
+      }),
+    );
+
+    // A second discovery provider + trigger: an EventBridge schedule that fires
+    // a static backend with a fixed image list baked into the schedule payload.
+    // Demonstrates a second trigger type sharing the same scanner/queue.
+    const scheduledProvider = inspector.addDiscoveryProvider(
+      'scheduled',
+      new ScheduledStaticDiscoveryProvider(),
+    );
+    inspector.addTrigger(
+      'nightly',
+      new ScheduledTrigger(this, 'Nightly', {
+        discovery: scheduledProvider,
+        schedules: [
+          {
+            id: 'Hourly',
+            schedule: 'rate(1 hour)',
+            payload: {
+              images: [
+                { image: 'library/alpine', ref: '3.19', registry: 'public' },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
     this.findingsBucket = inspector.findingsBucket;
     this.scanQueue = inspector.scanQueue;
     this.scanDeadLetterQueue = inspector.scanDeadLetterQueue;
     this.scannerFunction = inspector.scannerFunction;
-    this.discoveryFunction = inspector.discoveryFunction;
+    this.discoveryFunction = provider.discoveryFunction;
 
-    // Re-export the manifest bucket name so canaries / docs can drop into it.
-    if (trigger instanceof S3ManifestTrigger) {
-      new CfnOutput(this, 'ManifestBucketName', {
-        value: trigger.bucket.bucketName,
-        description:
-          'Drop a JSON manifest (array of {image, ref}) here to fire a scan.',
-      });
-    }
+    new CfnOutput(this, 'ManifestBucketName', {
+      value: manifestDiscovery.bucket.bucketName,
+      description:
+        'Drop a JSON manifest (array of {image, ref}) here to fire a scan.',
+    });
 
     // ─── Application Signals discovery + observability ─────────────────
     // Application Signals must be enabled at the account level before it
@@ -163,16 +197,9 @@ export class ScannerStack extends Stack {
     });
 
     // ─── Outputs ───────────────────────────────────────────────────────
-    new CfnOutput(this, 'FindingsBucketName', {
-      value: this.findingsBucket.bucketName,
-    });
-    new CfnOutput(this, 'ScanQueueUrl', { value: this.scanQueue.queueUrl });
-    new CfnOutput(this, 'ScanDLQUrl', {
-      value: this.scanDeadLetterQueue.queueUrl,
-    });
-    new CfnOutput(this, 'ScannerFunctionName', {
-      value: this.scannerFunction.functionName,
-    });
+    // FindingsBucketName / ScanQueueUrl / ScanDLQUrl / ScannerFunctionName are
+    // emitted by the InspectorScanner construct itself. Only the sample-stack-
+    // specific outputs are declared here.
     new CfnOutput(this, 'DiscoveryFunctionName', {
       value: this.discoveryFunction.functionName,
     });

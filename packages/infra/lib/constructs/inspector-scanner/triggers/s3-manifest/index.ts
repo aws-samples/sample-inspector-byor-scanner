@@ -1,20 +1,26 @@
-import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import { Construct } from 'constructs';
-import { IDiscoveryPlugin, IDiscoveryTrigger } from '../discovery-trigger';
-import { S3ManifestDiscoveryPlugin } from './plugin';
+import { DiscoveryAttachment, ITrigger } from '../discovery-trigger';
 
 export interface S3ManifestTriggerProps {
   /**
-   * BYO bucket. If omitted, the construct creates one with
-   * `removalPolicy: DESTROY` + `autoDeleteObjects: true` so `cdk destroy`
-   * is clean ─ manifests are inputs, not audit data, and the customer's
-   * org-wide bucket policies typically govern BYO production buckets.
+   * The discovery provider this trigger fires, by handle (returned by
+   * {@link InspectorScanner.addDiscoveryProvider}). The S3 OBJECT_CREATED
+   * notification is wired onto this provider's Lambda.
    */
-  readonly bucket?: s3.IBucket;
+  readonly discovery: DiscoveryAttachment;
+
+  /**
+   * The bucket whose OBJECT_CREATED events fire the provider. MUST be the SAME
+   * bucket the paired {@link S3ManifestDiscoveryProvider} provider reads ─ pass
+   * the provider's `bucket` here. The provider OWNS the bucket (creates one if
+   * not supplied); the trigger only attaches a notification to it, so there is
+   * no way to point the trigger and provider at different buckets.
+   */
+  readonly bucket: s3.IBucket;
 
   /**
    * Optional prefix filter on the OBJECT_CREATED notification. Only
@@ -24,28 +30,22 @@ export interface S3ManifestTriggerProps {
   readonly manifestPrefix?: string;
 
   /**
-   * Logical source name emitted as the `source` dimension on metrics and
-   * the `source` field on every SQS message. Keep it short, unique within
+   * Optional logical source name (informational only ─ the `source` stamped on
+   * messages + metrics comes from the provider). Keep it short, unique within
    * the deploy, and bounded ─ unbounded values blow up CloudWatch metric
    * cardinality.
    */
-  readonly source: string;
-
-  /**
-   * Override the discovery plugin. Defaults to
-   * {@link S3ManifestDiscoveryPlugin} bound to this trigger's bucket.
-   */
-  readonly plugin?: IDiscoveryPlugin;
+  readonly source?: string;
 }
 
 /**
- * S3-bucket trigger: drop a JSON manifest into the bucket → discovery
- * Lambda fires → SBOM scan kicks off.
+ * S3-bucket trigger: drop a JSON manifest into the bucket → the referenced
+ * provider's discovery Lambda fires → SBOM scan kicks off.
  *
- * The bucket is auto-created (or BYO). On `bind`, an OBJECT_CREATED
- * notification is wired to the discovery Lambda, optionally filtered by
- * `manifestPrefix`. The default plugin reads each manifest as a JSON
- * array of `{image, ref}` entries.
+ * The bucket is owned by the paired {@link S3ManifestDiscoveryProvider} provider
+ * (which reads the manifests); this trigger only attaches an OBJECT_CREATED
+ * notification to it, optionally filtered by `manifestPrefix`. Pass the
+ * provider's `bucket` as {@link S3ManifestTriggerProps.bucket}.
  *
  * Default manifest schema (the JSON file customers drop in):
  *
@@ -54,43 +54,20 @@ export interface S3ManifestTriggerProps {
  *       { "image": "myorg/api",     "ref": "sha256:abc..." }
  *     ]
  */
-export class S3ManifestTrigger extends Construct implements IDiscoveryTrigger {
-  public readonly source: string;
-  public readonly plugin: IDiscoveryPlugin;
+export class S3ManifestTrigger extends Construct implements ITrigger {
+  public readonly discovery: DiscoveryAttachment;
+  public readonly source?: string;
   public readonly bucket: s3.IBucket;
 
   private readonly manifestPrefix?: string;
-  private readonly ownsBucket: boolean;
 
   constructor(scope: Construct, id: string, props: S3ManifestTriggerProps) {
     super(scope, id);
 
+    this.discovery = props.discovery;
     this.source = props.source;
+    this.bucket = props.bucket;
     this.manifestPrefix = props.manifestPrefix;
-
-    if (props.bucket) {
-      this.bucket = props.bucket;
-      this.ownsBucket = false;
-    } else {
-      this.bucket = new s3.Bucket(this, 'Bucket', {
-        // Manifests are inputs, not audit data ─ safe to drop on destroy.
-        // The findings bucket (in InspectorScanner) keeps its RETAIN policy
-        // because findings are valuable history.
-        removalPolicy: RemovalPolicy.DESTROY,
-        autoDeleteObjects: true,
-        enforceSSL: true,
-        blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-        encryption: s3.BucketEncryption.S3_MANAGED,
-        lifecycleRules: [
-          // Keep manifests around for a week so an operator can replay
-          // recent triggers; longer retention has no audit value.
-          { expiration: Duration.days(7) },
-        ],
-      });
-      this.ownsBucket = true;
-    }
-
-    this.plugin = props.plugin ?? new S3ManifestDiscoveryPlugin({ bucket: this.bucket });
   }
 
   public bind(_scope: Construct, discoveryFn: lambda.IFunction): void {
@@ -104,15 +81,9 @@ export class S3ManifestTrigger extends Construct implements IDiscoveryTrigger {
     );
   }
 
-  public grantRead(role: iam.IRole): void {
-    // Plugin already grants its own read, but a BYO plugin override might
-    // forget; granting here too is idempotent and keeps the trigger's
-    // contract honest.
-    this.bucket.grantRead(role);
-  }
-
-  /** Whether this trigger created its own bucket (vs BYO). */
-  public get isBucketOwned(): boolean {
-    return this.ownsBucket;
+  public grantInvoke(_role: iam.IRole): void {
+    // `addEventNotification` (in `bind`) attaches the `lambda:InvokeFunction`
+    // resource policy allowing S3 to invoke the discovery Lambda, so there is
+    // nothing extra to grant against the discovery role here.
   }
 }

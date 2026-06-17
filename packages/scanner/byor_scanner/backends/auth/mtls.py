@@ -11,13 +11,16 @@ without a redeploy.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
+from pathlib import Path
 from typing import Any
 
 import boto3
 from aws_lambda_powertools import Logger
+from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
 from opentelemetry import trace
 
@@ -51,7 +54,15 @@ class MtlsAuth:
     """
 
     def __init__(self) -> None:
-        self._sm_client = boto3.client("secretsmanager")
+        # Adaptive retries so a transient Secrets Manager throttle is backed off
+        # rather than turning straight into a per-message AUTH_FAILED → DLQ.
+        self._sm_client = boto3.client(
+            "secretsmanager",
+            config=BotoConfig(retries={"mode": "adaptive", "max_attempts": 5}),
+        )
+        # Per-secret cert dir, set in setup() ─ so two registries scanned in one
+        # batch don't clobber each other's certs under a shared path.
+        self._cert_dir: Path | None = None
 
     @tracer.start_as_current_span("MtlsAuth.setup")
     def setup(self) -> None:
@@ -63,6 +74,10 @@ class MtlsAuth:
                 "Secrets Manager secret name to fetch client certificates.",
             )
 
+        # Hash the secret name (it may contain '/') into a per-secret subdir.
+        digest = hashlib.sha256(secret_name.encode()).hexdigest()[:16]
+        self._cert_dir = CERT_DIR / digest
+
         logger.info("mTLS setup starting", extra={"secretName": secret_name})
 
         secret = self._fetch(secret_name)
@@ -71,11 +86,16 @@ class MtlsAuth:
 
         logger.info(
             "mTLS setup complete",
-            extra={"certDir": str(CERT_DIR), "secretName": secret_name},
+            extra={"certDir": str(self._cert_dir), "secretName": secret_name},
         )
 
     def get_skopeo_args(self) -> list[str]:
-        return [f"--cert-dir={CERT_DIR}", "--tls-verify=true"]
+        if self._cert_dir is None:
+            raise ScanError(
+                CONFIG_ERROR,
+                "MtlsAuth.get_skopeo_args() called before setup().",
+            )
+        return [f"--cert-dir={self._cert_dir}", "--tls-verify=true"]
 
     def _fetch(self, secret_name: str) -> dict[str, Any]:
         try:
@@ -105,22 +125,19 @@ class MtlsAuth:
                 )
 
     def _write(self, secret: dict[str, Any]) -> None:
-        # skopeo's --cert-dir reads PEM material from disk; there is no API
-        # for passing bytes in memory. We materialize the secret into Lambda
-        # /tmp which is per-execution-environment, encrypted at rest by AWS,
-        # destroyed when the env is recycled, and never shared across
-        # invocations. The 0o700 dir + 0o600 file modes prevent same-host
-        # cross-process reads. CodeQL's clear-text-storage check fires on
-        # the write_text call below; suppressed because the constraint is
-        # imposed by the third-party tool, not a free design choice.
-        CERT_DIR.mkdir(parents=True, exist_ok=True)
-        os.chmod(CERT_DIR, _DIR_MODE)
+        # skopeo's --cert-dir needs PEM on disk (no in-memory API), so we
+        # materialize into Lambda /tmp (per-env, encrypted at rest) with 0o700/
+        # 0o600 modes. The CodeQL clear-text-storage suppression below is for
+        # this tool-imposed constraint, not a free choice.
+        assert self._cert_dir is not None  # set in setup() before _write()
+        self._cert_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self._cert_dir, _DIR_MODE)
         for filename, field in (
             (CA_FILENAME, "ca"),
             (CERT_FILENAME, "cert"),
             (KEY_FILENAME, "key"),
         ):
-            path = CERT_DIR / filename
+            path = self._cert_dir / filename
             # codeql[py/clear-text-storage-sensitive-data]
             path.write_text(secret[field])
             os.chmod(path, _FILE_MODE)
