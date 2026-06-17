@@ -77,12 +77,18 @@ def test_setup_writes_files_with_strict_perms(
     auth = _build_auth(monkeypatch, secret_value=json.dumps(fake_secret))
     auth.setup()
 
+    # Certs are written to a per-secret subdir of CERT_DIR (so multiple
+    # registries don't clobber a shared dir), exposed via the instance.
+    written_dir = auth._cert_dir  # type: ignore[attr-defined]
+    assert written_dir is not None
+    assert cert_dir in written_dir.parents
+
     for filename, expected_content_marker in (
         ("ca.crt", "fake-ca-content"),
         ("client.cert", "fake-cert-content"),
         ("client.key", "fake-key-content"),
     ):
-        path = cert_dir / filename
+        path = written_dir / filename
         assert path.exists(), f"{filename} not written"
         assert expected_content_marker in path.read_text()
         # 0o600 on every file (not just the key)
@@ -124,10 +130,47 @@ def test_setup_rejects_non_json_secret(
     assert exc.value.error_code == AUTH_FAILED
 
 
-def test_get_skopeo_args_shape() -> None:
-    from byor_scanner.backends.auth.mtls import MtlsAuth
-
-    auth = MtlsAuth()
+def test_get_skopeo_args_shape(
+    monkeypatch: pytest.MonkeyPatch,
+    cert_dir: Path,
+    fake_secret: dict[str, str],
+) -> None:
+    monkeypatch.setenv(ENV_MTLS_SECRET_NAME, "scanner/mtls")
+    auth = _build_auth(monkeypatch, secret_value=json.dumps(fake_secret))
+    auth.setup()
     args = auth.get_skopeo_args()
     assert any(a.startswith("--cert-dir=") for a in args)
     assert "--tls-verify=true" in args
+
+
+def test_get_skopeo_args_before_setup_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    auth = _build_auth(monkeypatch, secret_value=None)
+    with pytest.raises(ScanError) as exc:
+        auth.get_skopeo_args()
+    assert exc.value.error_code == CONFIG_ERROR
+
+
+def test_two_registries_get_isolated_cert_dirs(
+    monkeypatch: pytest.MonkeyPatch,
+    cert_dir: Path,
+    fake_secret: dict[str, str],
+) -> None:
+    # Two registries with distinct secret names must NOT share a cert dir, or
+    # the second setup would clobber the first's certs (a cross-registry
+    # identity leak when the first registry is scanned again later in a batch).
+    auth_a = _build_auth(monkeypatch, secret_value=json.dumps(fake_secret))
+    auth_b = _build_auth(monkeypatch, secret_value=json.dumps(fake_secret))
+
+    monkeypatch.setenv(ENV_MTLS_SECRET_NAME, "scanner/a")
+    auth_a.setup()
+    args_a = auth_a.get_skopeo_args()
+
+    monkeypatch.setenv(ENV_MTLS_SECRET_NAME, "scanner/b")
+    auth_b.setup()
+
+    # A's args still point at A's own dir after B's setup ran ─ the fix for the
+    # shared-/tmp/certs collision. Re-reading A's args is stable.
+    assert auth_a.get_skopeo_args() == args_a
+    assert auth_a._cert_dir != auth_b._cert_dir  # type: ignore[attr-defined]
+    assert auth_a._cert_dir is not None  # type: ignore[attr-defined]
+    assert f"--cert-dir={auth_a._cert_dir}" in args_a  # type: ignore[attr-defined]

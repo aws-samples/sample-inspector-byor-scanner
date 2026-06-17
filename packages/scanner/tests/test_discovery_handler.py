@@ -5,7 +5,8 @@ Covers:
   - per-event ``source`` overrides the ``BYOR_TRIGGER_SOURCE`` env-var default,
   - image-list validation (cap, missing fields),
   - retry-then-fail when the backend keeps raising,
-  - SQS partial-batch failure logging,
+  - SQS partial-batch failure: transient is retried+recovered, persistent
+    raises ENQUEUE_FAILED so the cycle re-fires,
   - SQS message body carries ``source`` (not legacy ``mode``).
 
 The boto3 SQS client is patched on the module after import so we never
@@ -103,6 +104,36 @@ def test_sqs_message_carries_source_not_mode(
     body = json.loads(sent_entries[0]["MessageBody"])
     assert body["source"] == "Cron-12h"
     assert "mode" not in body
+    # No backend-supplied registry → the key is omitted; the scanner resolves
+    # the default (a registry named "default", or the sole configured one).
+    assert "registry" not in body
+
+
+def test_sqs_message_carries_backend_registry(
+    mod: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_backend = MagicMock()
+    fake_backend.discover.return_value = [
+        {"image": "x/y", "ref": "v1", "registry": "prod"},
+    ]
+    monkeypatch.setattr(mod, "discovery", fake_backend)
+    mod.handler({"source": "Cron-12h", "payload": {}}, _ctx())
+    sent_entries = mod.sqs_client.send_message_batch.call_args.kwargs["Entries"]
+    body = json.loads(sent_entries[0]["MessageBody"])
+    assert body["registry"] == "prod"
+
+
+def test_validation_rejects_invalid_registry(
+    mod: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_backend = MagicMock()
+    fake_backend.discover.return_value = [
+        {"image": "x/y", "ref": "v1", "registry": ""},
+    ]
+    monkeypatch.setattr(mod, "discovery", fake_backend)
+    with pytest.raises(Exception) as exc:
+        mod.handler({"payload": {}}, _ctx())
+    assert "registry" in str(exc.value)
 
 
 def test_zero_images_does_not_call_sqs(
@@ -155,24 +186,60 @@ def test_backend_retries_then_fails(
     assert fake_backend.discover.call_count == 3
 
 
-def test_partial_sqs_failure_is_logged_and_counted(
+def test_transient_partial_sqs_failure_is_retried_and_recovered(
     mod: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(mod.time, "sleep", lambda _s: None)  # no real backoff
     fake_backend = MagicMock()
     fake_backend.discover.return_value = [
         {"image": "library/nginx", "ref": "v1"},
         {"image": "library/redis", "ref": "v2"},
     ]
     monkeypatch.setattr(mod, "discovery", fake_backend)
+    # First send: entry "0" fails transiently; retry of just "0" succeeds.
+    mod.sqs_client.send_message_batch.side_effect = [
+        {"Failed": [{"Id": "0", "Code": "ServiceUnavailable", "Message": "..."}],
+         "Successful": [{"Id": "1"}]},
+        {"Failed": [], "Successful": [{"Id": "0"}]},
+    ]
+    result = mod.handler({"source": "Cron", "payload": {"images": []}}, _ctx())
+    # Both images end up enqueued; the retry re-sent ONLY the failed entry.
+    assert result == {"source": "Cron", "imagesEnqueued": 2}
+    second_call = mod.sqs_client.send_message_batch.call_args_list[1]
+    resent_ids = [e["Id"] for e in second_call.kwargs["Entries"]]
+    assert resent_ids == ["0"]
+
+
+def test_persistent_partial_sqs_failure_raises_enqueue_failed(
+    mod: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+    fake_backend = MagicMock()
+    fake_backend.discover.return_value = [
+        {"image": "library/nginx", "ref": "v1"},
+        {"image": "library/redis", "ref": "v2"},
+    ]
+    monkeypatch.setattr(mod, "discovery", fake_backend)
+    # Entry "0" fails on every attempt → dropped after retries.
     mod.sqs_client.send_message_batch.return_value = {
         "Failed": [{"Id": "0", "Code": "ServiceUnavailable", "Message": "..."}],
         "Successful": [{"Id": "1"}],
     }
-    result = mod.handler(
-        {"source": "Manual", "payload": {"images": []}}, _ctx()
-    )
-    # Two attempts, one failed → one enqueued
-    assert result == {"source": "Manual", "imagesEnqueued": 1}
+    # Spy on single_metric to prove the drop surfaces as ImagesEnqueueFailed.
+    metric_names: list[str] = []
+    real_single_metric = mod.single_metric
+
+    def _spy(**kwargs: Any) -> Any:
+        metric_names.append(kwargs.get("name"))
+        return real_single_metric(**kwargs)
+
+    monkeypatch.setattr(mod, "single_metric", _spy)
+
+    # The cycle fails loudly so the trigger re-fires (no silent drop).
+    with pytest.raises(mod.ScanError) as exc:
+        mod.handler({"source": "Cron", "payload": {"images": []}}, _ctx())
+    assert exc.value.error_code == "ENQUEUE_FAILED"
+    assert "ImagesEnqueueFailed" in metric_names
 
 
 def test_static_discovery_returns_payload_images() -> None:

@@ -11,7 +11,7 @@ from byor_scanner import config, errors, plugin_loader, protocols, validation
 
 def test_config_loads() -> None:
     assert config.config.scan.max_image_size_gb >= 1
-    assert config.config.scan.tls_verify is True
+    assert config.config.scan.inspect_timeout >= 1
 
 
 def test_protocols_runtime_checkable() -> None:
