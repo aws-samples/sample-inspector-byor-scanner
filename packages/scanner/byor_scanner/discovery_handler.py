@@ -1,9 +1,9 @@
 """Discovery Lambda: find images and fan out to SQS for scanning.
 
-Triggered by whatever ``IDiscoveryTrigger`` the deploy wired up (today: an
-S3 manifest bucket, EventBridge schedules, or direct invocation). The
-trigger sets ``BYOR_TRIGGER_SOURCE`` on this Lambda's env so every event
-this handler receives is tagged with a logical source name even when the
+Triggered by whatever trigger the deploy wired up (today: an S3 manifest
+bucket, EventBridge schedules, or direct invocation). The trigger sets
+``BYOR_TRIGGER_SOURCE`` on this Lambda's env so every event this handler
+receives is tagged with a logical source name even when the
 event itself doesn't carry one.
 
 ## Event envelope
@@ -11,7 +11,7 @@ event itself doesn't carry one.
 Every plugin's :meth:`discover` is called with the same shape::
 
     {
-      "source":  "Hourly" | "Manifest" | "Manual" | <whatever>,
+      "source":  "Hourly" | "Manifest" | <whatever>,
       "payload": <opaque dict — the trigger's input, plugin owns parsing>
     }
 
@@ -25,12 +25,16 @@ incoming event is wrapped here with ``source`` defaulting to
 
 Every batch enqueued to SQS carries::
 
-    {"image": "...", "ref": "...", "source": "<source>", "requestedAt": "<ISO>"}
+    {"image": "...", "ref": "...", "source": "<source>",
+     "requestedAt": "<ISO>", "registry": "<id>"}
 
 The scanner Lambda consumes these messages from the SQS event source
 mapping. ``ref`` is whatever the discovery backend returned ─ a tag or a
-digest; the scanner pipeline resolves either form. ``source`` is
-forwarded for log + metric context.
+digest; the scanner pipeline resolves either form. ``registry`` is the
+configured registry id the scanner resolves the URL + auth from; it is
+included ONLY when the backend supplies one. When omitted, the scanner
+resolves the default registry (one named ``"default"``, or the sole
+configured registry). ``source`` is forwarded for log + metric context.
 """
 
 from __future__ import annotations
@@ -42,7 +46,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import boto3
-from aws_lambda_powertools import Logger, Metrics
+from aws_lambda_powertools import Logger, Metrics, single_metric
 from aws_lambda_powertools.metrics import MetricUnit
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
@@ -62,6 +66,7 @@ from byor_scanner.constants import (
 from byor_scanner.errors import (
     CONFIG_ERROR,
     DISCOVERY_FAILED,
+    ENQUEUE_FAILED,
     INVALID_INPUT,
     ScanError,
 )
@@ -137,12 +142,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG
 def _envelope_for(event: dict[str, Any]) -> dict[str, Any]:
     """Wrap the raw Lambda event in the ``{source, payload}`` envelope.
 
-    If the event already carries a ``source`` key (e.g. EventBridge schedule
-    inputs authored with ``ScheduledTrigger``'s per-schedule payload), the
-    event is treated as the envelope itself. Otherwise the raw event is
-    treated as the payload and ``source`` falls back to
-    ``BYOR_TRIGGER_SOURCE`` (set by the trigger construct), then to
-    ``DEFAULT_TRIGGER_SOURCE``.
+    An event with a ``source`` key (e.g. a scheduled trigger's input) is the
+    envelope itself; otherwise the whole event is the payload and ``source``
+    falls back to ``BYOR_TRIGGER_SOURCE`` then ``DEFAULT_TRIGGER_SOURCE``.
     """
     if isinstance(event, dict) and "source" in event:
         return {
@@ -201,6 +203,68 @@ def _validate_images(images: list[dict[str, str]]) -> None:
                     f"Discovery result at index {idx} missing or empty "
                     f"{field!r}: {img!r}",
                 )
+        # `registry` is optional ─ when a backend omits it the field is left
+        # off the message and the scanner resolves the default registry. If a
+        # backend supplies it, it must be a non-empty string.
+        registry = img.get("registry")
+        if registry is not None and (not isinstance(registry, str) or not registry):
+            raise ScanError(
+                INVALID_INPUT,
+                f"Discovery result at index {idx} has invalid "
+                f"'registry' (must be a non-empty string): {img!r}",
+            )
+
+
+def _message_body(
+    img: dict[str, str], source: str, requested_at: str
+) -> dict[str, str]:
+    """Build one SQS scan message body.
+
+    ``registry`` is included only when the backend supplied one; otherwise it is
+    omitted and the scanner resolves the default ─ keeping that decision in one
+    place.
+    """
+    body = {
+        "image": img["image"],
+        "ref": img["ref"],
+        "source": source,
+        "requestedAt": requested_at,
+    }
+    registry = img.get("registry")
+    if registry:
+        body["registry"] = registry
+    return body
+
+
+def _send_batch_with_retry(entries: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Send one SQS batch, re-sending only the entries SQS rejects.
+
+    ``send_message_batch`` is partial-success; rejected entries are usually
+    transient, so we retry just those with exponential backoff. Returns the
+    entries still failing after the last attempt (empty on success).
+    """
+    pending = entries
+    for attempt in range(MAX_RETRIES):
+        response = sqs_client.send_message_batch(QueueUrl=QUEUE_URL, Entries=pending)
+        failed = response.get("Failed", [])
+        if not failed:
+            return []
+        failed_ids = {entry["Id"] for entry in failed}
+        pending = [e for e in pending if e["Id"] in failed_ids]
+        if attempt == MAX_RETRIES - 1:
+            return pending
+        wait = BASE_BACKOFF * (2**attempt)
+        logger.warning(
+            "Partial SQS send failure, retrying failed entries",
+            extra={
+                "failedCount": len(failed),
+                "waitSeconds": wait,
+                "attempt": attempt + 1,
+                "codes": sorted({entry["Code"] for entry in failed}),
+            },
+        )
+        time.sleep(wait)
+    return pending
 
 
 @tracer.start_as_current_span("EnqueueBatch")
@@ -210,39 +274,37 @@ def _enqueue(images: list[dict[str, str]], source: str) -> int:
 
     requested_at = datetime.now(UTC).isoformat()
     enqueued = 0
+    dropped = 0
 
     for batch_start in range(0, len(images), SQS_BATCH_SIZE):
         batch = images[batch_start : batch_start + SQS_BATCH_SIZE]
         entries = [
             {
                 "Id": str(idx),
-                "MessageBody": json.dumps(
-                    {
-                        "image": img["image"],
-                        "ref": img["ref"],
-                        "source": source,
-                        "requestedAt": requested_at,
-                    }
-                ),
+                "MessageBody": json.dumps(_message_body(img, source, requested_at)),
             }
             for idx, img in enumerate(batch)
         ]
 
-        response = sqs_client.send_message_batch(QueueUrl=QUEUE_URL, Entries=entries)
+        still_failed = _send_batch_with_retry(entries)
+        enqueued += len(entries) - len(still_failed)
+        dropped += len(still_failed)
 
-        failed = response.get("Failed", [])
-        if failed:
-            logger.error(
-                "Partial SQS send failure",
-                extra={
-                    "failedCount": len(failed),
-                    "errors": [
-                        {"id": entry["Id"], "code": entry["Code"]}
-                        for entry in failed
-                    ],
-                },
-            )
-
-        enqueued += len(entries) - len(failed)
+    if dropped:
+        # Meter the drop, then fail so the trigger re-fires the cycle ─ recovery,
+        # not just visibility. Re-enqueuing is cheap (scanner is idempotent via
+        # the digest-keyed SBOM cache).
+        with single_metric(
+            name="ImagesEnqueueFailed",
+            unit=MetricUnit.Count,
+            value=dropped,
+            namespace=METRIC_NAMESPACE,
+        ) as metric:
+            metric.add_dimension(name="source", value=source)
+        raise ScanError(
+            ENQUEUE_FAILED,
+            f"{dropped} image(s) could not be enqueued to SQS after "
+            f"{MAX_RETRIES} attempts; failing the cycle for retry.",
+        )
 
     return enqueued

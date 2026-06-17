@@ -28,8 +28,16 @@ class ScanError(Exception):
 CONFIG_ERROR = "CONFIG_ERROR"
 INVALID_INPUT = "INVALID_INPUT"
 
+# --- Resolve stage (per-message registry resolution) ---
+# Raised when a message references a registry id not present in BYOR_REGISTRIES.
+UNKNOWN_REGISTRY = "UNKNOWN_REGISTRY"
+
 # --- Discovery handler ---
 DISCOVERY_FAILED = "DISCOVERY_FAILED"
+# Images could not be enqueued to SQS after retries (they would otherwise be
+# silently unscanned). Raised so the discovery invocation fails loudly and the
+# trigger re-fires the cycle.
+ENQUEUE_FAILED = "ENQUEUE_FAILED"
 
 # --- Inspect stage (skopeo inspect) ---
 INSPECT_TIMEOUT = "INSPECT_TIMEOUT"
@@ -118,6 +126,9 @@ def classify_sbomgen_error(stderr: str) -> str:
 # --- Stage classification (maps error codes to pipeline stages for alarms) ---
 
 _ERROR_TO_STAGE: dict[str, str] = {
+    UNKNOWN_REGISTRY: "Resolve",
+    CONFIG_ERROR: "Resolve",
+    INVALID_INPUT: "Resolve",
     AUTH_FAILED: "Inspect",
     INSPECT_FAILED: "Inspect",
     INSPECT_TIMEOUT: "Inspect",

@@ -70,7 +70,7 @@ class DiscoveryBackend(Protocol):
     event, or a manual ``aws lambda invoke``::
 
         {
-          "source": "Hourly" | "Manifest" | "Manual" | <whatever>,
+          "source": "Hourly" | "Manifest" | <whatever>,
           "payload": <opaque dict the trigger built>,
         }
 

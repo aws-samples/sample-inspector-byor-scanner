@@ -1,68 +1,109 @@
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Construct } from 'constructs';
+import { RegistryAttachment } from '../inspector-scanner';
 
 /**
- * A discovery plugin: the Python class that turns a trigger's event payload
- * into a list of {image, ref} entries.
- *
- * Plugins are paired with a single trigger ─ each trigger ships its default
- * plugin and accepts an override via its `plugin` prop. The trigger's
- * `bind` is responsible for setting `BYOR_DISCOVERY_BACKEND` on the
- * discovery Lambda to this plugin's dotted path.
- *
- * Mirrors the {@link IRegistryAuth} pattern from `docker-registry/auth/`:
- * narrow interface, env-var injection, optional layer for plugin-bearing
- * payloads, `grantRead` for IAM.
+ * A discovery provider: the CDK metadata describing a Python backend that turns
+ * an event payload into a list of {image, ref} entries. Attached via
+ * {@link InspectorScanner.addDiscoveryProvider}, which stands up a dedicated
+ * discovery Lambda for it. Mirrors the {@link IRepositoryAuth} pattern: narrow
+ * interface, env-var injection, optional layer, `grantRead` for IAM.
  */
-export interface IDiscoveryPlugin {
+export interface IDiscoveryProvider {
   /** Dotted Python path (`module.path.ClassName`). Set as `BYOR_DISCOVERY_BACKEND`. */
   readonly dottedPath: string;
 
-  /** Env vars the plugin needs at runtime (e.g. `BYOR_MANIFEST_BUCKET`). */
+  /** Env vars the provider needs at runtime (e.g. `BYOR_MANIFEST_BUCKET`). */
   readonly environment: Record<string, string>;
 
   /**
-   * Optional layer carrying the plugin's Python source. Built-in plugins
+   * Optional layer carrying the provider's Python source. Built-in providers
    * shipped in the scanner zip leave this undefined.
    */
   readonly layer?: lambda.ILayerVersion;
 
-  /** Grant the discovery Lambda anything the plugin reads (S3, Secrets, ...). */
+  /**
+   * Registries this provider enqueues images for. Optional ─ a provider that
+   * stamps a `registry` field per image references these handles. Every entry
+   * MUST have been attached via {@link InspectorScanner.addRegistry} on the
+   * SAME scanner the provider is added to; foreign/unknown handles are rejected
+   * by {@link InspectorScanner.addDiscoveryProvider}.
+   */
+  readonly registries?: RegistryAttachment[];
+
+  /** Grant the discovery Lambda anything the provider reads (S3, Secrets, ...). */
   grantRead(role: iam.IRole): void;
 }
 
 /**
- * A discovery trigger: the CDK seam that wires an event source onto the
- * discovery Lambda and pairs it with a {@link IDiscoveryPlugin}.
- *
- * Today's triggers:
- *  - {@link S3ManifestTrigger}  ─ default; an S3 bucket fires the Lambda on PUT
- *  - {@link ScheduledTrigger}    ─ N EventBridge schedules with opaque payloads
- *  - {@link ManualTrigger}       ─ no auto-trigger; invoke by hand
- *
- * Adding a new trigger = one file implementing this interface. The L3
- * (`InspectorScanner`) doesn't need to change.
+ * Handle returned by {@link InspectorScanner.addDiscoveryProvider}. Carries the
+ * provider `id`, its resolved `source` (the value stamped on SQS messages +
+ * the `source` metric dimension), the dedicated discovery Lambda built for it,
+ * and its per-provider failure alarm ─ so callers can reach what was created
+ * (extra grants, extra alarm actions) and so triggers can reference the
+ * Lambda by handle.
  */
-export interface IDiscoveryTrigger {
-  /**
-   * Logical id emitted as the `source` value on every SQS message and the
-   * `source` dimension on the discovery + scanner metrics.
-   *
-   * Keep it short, unique within the deploy, and bounded ─ unbounded
-   * values blow up CloudWatch metric cardinality.
-   */
+export interface DiscoveryAttachment {
+  /** The provider id, unique within the scanner. */
+  readonly id: string;
+  /** Source value stamped on SQS messages + the `source` metric dimension. */
   readonly source: string;
+  /** The dedicated discovery Lambda built for this provider. */
+  readonly discoveryFunction: lambda.IFunction;
+  /** Per-provider failure alarm (fires when this discovery Lambda errors). */
+  readonly failureAlarm: cloudwatch.IAlarm;
+}
 
-  /** Plugin paired with this trigger (each trigger ships a sensible default). */
-  readonly plugin: IDiscoveryPlugin;
+/**
+ * Handle returned by {@link InspectorScanner.addTrigger}. Carries the trigger
+ * `id` and the {@link DiscoveryAttachment} it fires, so callers can correlate a
+ * trigger back to its provider.
+ */
+export interface TriggerAttachment {
+  /** The trigger id, unique within the scanner. */
+  readonly id: string;
+  /** The discovery provider this trigger fires. */
+  readonly discovery: DiscoveryAttachment;
+}
+
+/**
+ * A trigger: an event source wired onto a discovery provider's Lambda. It
+ * references the provider it drives by handle ({@link DiscoveryAttachment})
+ * rather than owning a backend ─ purely "which event source fires which
+ * provider". Built-ins: {@link S3ManifestTrigger} (S3 PUT) and
+ * {@link ScheduledTrigger} (EventBridge schedules). A provider with no trigger
+ * is manual-invoke only. Add a trigger = one file implementing this interface.
+ */
+export interface ITrigger {
+  /**
+   * The discovery provider this trigger fires, by handle. MUST be a handle
+   * returned by {@link InspectorScanner.addDiscoveryProvider} on the SAME
+   * scanner the trigger is added to ─ {@link InspectorScanner.addTrigger}
+   * rejects a handle from another scanner instance (it would bind the event
+   * source to the wrong Lambda).
+   */
+  readonly discovery: DiscoveryAttachment;
 
   /**
-   * Wire event source (S3 notification, schedules, ...) onto the discovery
-   * Lambda. Called once by the L3 during construction.
+   * Optional logical source name. Informational only ─ the actual `source`
+   * stamped on messages + metrics comes from the provider
+   * ({@link DiscoveryAttachment.source}) or the per-event payload. Keep it
+   * short, unique within the deploy, and bounded.
+   */
+  readonly source?: string;
+
+  /**
+   * Wire the event source (S3 notification, schedules, ...) onto the provider's
+   * discovery Lambda. Called once by the L3 from {@link InspectorScanner.addTrigger}.
    */
   bind(scope: Construct, discoveryFn: lambda.IFunction): void;
 
-  /** Grant the discovery Lambda anything the trigger reads. */
-  grantRead(role: iam.IRole): void;
+  /**
+   * Hook for extra invoke wiring against the provider's discovery Lambda role.
+   * The built-ins self-wire invoke perms in `bind`, so they no-op this; it
+   * exists for custom triggers that need to grant against the role.
+   */
+  grantInvoke(role: iam.IRole): void;
 }

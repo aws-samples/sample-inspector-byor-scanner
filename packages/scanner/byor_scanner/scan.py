@@ -86,15 +86,19 @@ class ScanRequest:
     # Emitted as the `source` dimension on per-outcome metrics so dashboards
     # can graph scan volume / failures per trigger.
     source: str = "unknown"
+    # Configured registry id (key in BYOR_REGISTRIES) the `registry` URL came
+    # from. Emitted as the `registry` metric dimension so scan/skip rates are
+    # separable per registry. Bounded low-cardinality (set by addRegistry).
+    registry_id: str = "default"
 
 
-def _emit_outcome(name: str, source: str) -> None:
-    """Emit a count of ``name`` and a copy dimensioned by ``source``.
+def _emit_outcome(name: str, source: str, registry_id: str) -> None:
+    """Emit a count of ``name`` plus copies dimensioned by ``source`` and ``registry``.
 
     The aggregate ``add_metric`` keeps the global service-level series
-    untouched (today's dashboards keep working). ``single_metric`` writes
-    the dimensioned copy as its own EMF blob so the ``source`` dimension
-    does not bleed onto the other metrics emitted during this invocation.
+    untouched (today's dashboards keep working). Each ``single_metric`` writes
+    a dimensioned copy as its own EMF blob so the dimension does not bleed onto
+    the other metrics emitted during this invocation.
     """
     metrics.add_metric(name=name, unit=MetricUnit.Count, value=1)
     with single_metric(
@@ -104,6 +108,13 @@ def _emit_outcome(name: str, source: str) -> None:
         value=1,
     ) as metric:
         metric.add_dimension(name="source", value=source)
+    with single_metric(
+        namespace=METRIC_NAMESPACE,
+        name=name,
+        unit=MetricUnit.Count,
+        value=1,
+    ) as metric:
+        metric.add_dimension(name="registry", value=registry_id)
 
 
 def ensure_policy_json() -> None:
@@ -129,7 +140,11 @@ def ensure_policy_json() -> None:
 def scan_image(req: ScanRequest) -> dict[str, Any]:
     """Run the full pipeline for a single image."""
     if not req.registry:
-        raise ScanError(CONFIG_ERROR, "BYOR_REGISTRY_URL is not configured")
+        raise ScanError(
+            CONFIG_ERROR,
+            f"Registry {req.registry_id!r} has no URL configured "
+            "(set its url in BYOR_REGISTRIES, or BYOR_REGISTRY_URL)",
+        )
 
     validate_image_name(req.image)
     validate_ref(req.ref)
@@ -151,7 +166,7 @@ def scan_image(req: ScanRequest) -> dict[str, Any]:
                 "sizeBytes": size,
             },
         )
-        _emit_outcome("ImagesSkipped", req.source)
+        _emit_outcome("ImagesSkipped", req.source, req.registry_id)
         return {"outcome": "skipped", "reason": "too_large"}
 
     # Stage 2: SBOM cache check (only meaningful when ref is a digest)
@@ -204,7 +219,7 @@ def scan_image(req: ScanRequest) -> dict[str, Any]:
         # Metrics
         vulns = findings.get("vulnerabilities", [])
         severity_counts = _count_by_severity(vulns)
-        _emit_outcome("ImagesScanned", req.source)
+        _emit_outcome("ImagesScanned", req.source, req.registry_id)
         metrics.add_metric(
             name="VulnerabilitiesFound", unit=MetricUnit.Count, value=len(vulns)
         )
@@ -242,12 +257,28 @@ def _build_image_ref(registry: str, image: str, ref: str) -> str:
     return f"{registry}/{image}{sep}{ref}"
 
 
+def _reject_unknown_flag(arg: str) -> None:
+    """Raise ``CONFIG_ERROR`` if ``arg`` isn't a recognized skopeo auth flag.
+
+    A rogue plugin could otherwise inject arbitrary skopeo flags. New flag
+    types must be declared in ``SRC_PREFIX_MAP`` or ``GLOBAL_SKOPEO_FLAGS``.
+    """
+    if any(arg.startswith(flag) for flag in GLOBAL_SKOPEO_FLAGS):
+        return
+    if any(arg.startswith(prefix) for prefix in SRC_PREFIX_MAP):
+        return
+    raise ScanError(
+        CONFIG_ERROR,
+        f"AuthProvider returned unknown skopeo flag: {arg.split('=', 1)[0]!r}. "
+        "New flag types must be declared in SRC_PREFIX_MAP or "
+        "GLOBAL_SKOPEO_FLAGS in byor_scanner/constants.py.",
+    )
+
+
 def _to_src_args(auth_args: list[str]) -> list[str]:
     """Translate auth args to ``skopeo copy``'s ``--src-*`` namespace.
 
-    Unknown flags raise ``CONFIG_ERROR`` rather than passing through ─ a
-    rogue plugin could otherwise inject arbitrary skopeo flags. New flag
-    types must be declared in ``SRC_PREFIX_MAP`` or ``GLOBAL_SKOPEO_FLAGS``.
+    Unknown flags are rejected (see :func:`_reject_unknown_flag`).
     """
     src_args: list[str] = []
     for arg in auth_args:
@@ -259,19 +290,18 @@ def _to_src_args(auth_args: list[str]) -> list[str]:
                 src_args.append(f"{src_prefix}{arg.split('=', 1)[1]}")
                 break
         else:
-            raise ScanError(
-                CONFIG_ERROR,
-                f"AuthProvider returned unknown skopeo flag: "
-                f"{arg.split('=', 1)[0]!r}. "
-                "New flag types must be declared in SRC_PREFIX_MAP or "
-                "GLOBAL_SKOPEO_FLAGS in byor_scanner/constants.py.",
-            )
+            _reject_unknown_flag(arg)
     return src_args
 
 
 @tracer.start_as_current_span("InspectImage")
 def _inspect(image_ref: str, auth_args: list[str]) -> tuple[str, int]:
     """Run ``skopeo inspect``; return resolved digest + compressed size."""
+    # `inspect` consumes auth flags in their native namespace, but still gate
+    # them through the same allowlist `copy` uses so a plugin can't inject a
+    # rogue flag on the inspect path.
+    for arg in auth_args:
+        _reject_unknown_flag(arg)
     result = subprocess_run(
         argv=[SKOPEO_PATH, "inspect", *auth_args, f"docker://{image_ref}"],
         timeout=config.scan.inspect_timeout,
@@ -357,6 +387,10 @@ def _write_findings(
 ) -> str:
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     short_ref = ref.replace("sha256:", "")[:12]
+    # NOTE: the key is keyed by image + digest, NOT registry. Two registries
+    # serving the same image name + digest write under the same prefix
+    # (distinguished only by timestamp). Acceptable today; if registries must be
+    # kept separate, prefix the key with the registry id.
     findings_key = f"findings/{image}/{short_ref}/{timestamp}.json"
     body = json.dumps(findings, default=str)
     if len(body.encode()) > MAX_FINDINGS_BYTES:

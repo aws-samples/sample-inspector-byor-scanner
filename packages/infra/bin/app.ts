@@ -12,17 +12,17 @@ const env = {
 };
 
 // Deploy order:
-//   1. BinaryStack ─ owns the skopeo + sbomgen layer.
+//   1. BinaryStack ─ owns the skopeo + sbomgen layer for the test registry seeder.
 //   2. TestingStack ─ provisions VPC + test registry + mTLS secret + seeder.
-//   3. ScannerStack ─ consumes VPC / secret from TestingStack and the layer
-//      from BinaryStack.
+//   3. ScannerStack ─ consumes VPC / secret from TestingStack. It owns its own
+//      binary layer, so it does not depend on BinaryStack.
 // `cdk deploy --all` follows the implicit dependency edges automatically.
 //
 // Python Lambda code is bundled at synth time via PythonFunction (uv-based);
 // no separate `nx run scanner:package` step is required before deploying.
 const binaries = new BinaryStack(app, 'BinaryStack', {
   env,
-  description: 'Inspector BYOR Scanner — shared binary layer (skopeo, inspector-sbomgen)',
+  description: 'Inspector BYOR Scanner — binary layer for the test registry seeder',
 });
 
 const testing = new TestingStack(app, 'TestingStack', {
@@ -37,7 +37,6 @@ new ScannerStack(app, 'ScannerStack', {
   vpc: testing.vpc,
   registryUrl: testing.registryEndpoint,
   mtlsSecret: testing.clientSecret,
-  binaryLayer: binaries.binaryLayer,
 });
 
 // TODO: re-enable cdk-nag (AwsSolutionsChecks) once both stacks have the

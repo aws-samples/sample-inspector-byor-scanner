@@ -1,5 +1,5 @@
 import * as iam from 'aws-cdk-lib/aws-iam';
-import { IDiscoveryPlugin } from '../discovery-trigger';
+import { IDiscoveryProvider } from '../discovery-trigger';
 
 /**
  * Default plugin for {@link ScheduledTrigger}.
@@ -11,7 +11,7 @@ import { IDiscoveryPlugin } from '../discovery-trigger';
  * fields from `payload` ─ the schedule's `payload` is opaque to this
  * construct.
  */
-export class ScheduledStaticDiscoveryPlugin implements IDiscoveryPlugin {
+export class ScheduledStaticDiscoveryProvider implements IDiscoveryProvider {
   public readonly dottedPath =
     'byor_scanner.backends.discovery.scheduled_static.ScheduledStaticDiscovery';
   public readonly environment: Record<string, string> = {};

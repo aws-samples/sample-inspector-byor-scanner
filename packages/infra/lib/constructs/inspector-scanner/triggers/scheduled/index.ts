@@ -2,8 +2,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import { Construct } from 'constructs';
-import { IDiscoveryPlugin, IDiscoveryTrigger } from '../discovery-trigger';
-import { ScheduledStaticDiscoveryPlugin } from './plugin';
+import { DiscoveryAttachment, ITrigger } from '../discovery-trigger';
 
 /**
  * One EventBridge schedule entry. Each entry becomes its own
@@ -11,11 +10,11 @@ import { ScheduledStaticDiscoveryPlugin } from './plugin';
  * discovery handler expects.
  *
  * `payload` is opaque ─ the construct passes it through verbatim. The
- * paired plugin owns parsing it. Examples:
+ * provider owns parsing it. Examples:
  *
  *   - `{ window: 'PT1H' }` for a "scan everything launched in the last
  *     hour" plugin.
- *   - `{ images: [{...}] }` for the default {@link ScheduledStaticDiscoveryPlugin}.
+ *   - `{ images: [{...}] }` for the default {@link ScheduledStaticDiscoveryProvider}.
  *   - `{ tags: ['prod'], window: 'PT12H' }` for a custom plugin that
  *     filters by both tag and time window.
  */
@@ -45,24 +44,22 @@ export interface ScheduledTriggerEntry {
 }
 
 export interface ScheduledTriggerProps {
+  /**
+   * The discovery provider these schedules fire, by handle (returned by
+   * {@link InspectorScanner.addDiscoveryProvider}). Each schedule invokes this
+   * provider's Lambda with its own `{ source, payload }` envelope.
+   */
+  readonly discovery: DiscoveryAttachment;
+
   /** One or more schedule entries. Each becomes a `CfnSchedule`. */
   readonly schedules: ScheduledTriggerEntry[];
 
   /**
-   * Trigger-level source name. Each schedule's own ``id`` is what lands on
-   * the SQS message and metric dimension at fire time; this value is only
-   * read if an event arrives without a per-event `source` field (e.g. an
-   * out-of-band direct invoke for testing).
-   *
-   * Keep it short, unique within the deploy, and bounded.
+   * Optional trigger-level source name (informational only). Each schedule's
+   * own ``id`` is what lands on the SQS message + metric dimension at fire
+   * time. Keep it short, unique within the deploy, and bounded.
    */
-  readonly source: string;
-
-  /**
-   * Override the discovery plugin. Defaults to
-   * {@link ScheduledStaticDiscoveryPlugin}.
-   */
-  readonly plugin?: IDiscoveryPlugin;
+  readonly source?: string;
 }
 
 /**
@@ -85,9 +82,9 @@ export interface ScheduledTriggerProps {
  * The paired plugin reads `event['payload']['window']` and decides what
  * to query. Adding a new cadence = one new entry; no Python change.
  */
-export class ScheduledTrigger extends Construct implements IDiscoveryTrigger {
-  public readonly source: string;
-  public readonly plugin: IDiscoveryPlugin;
+export class ScheduledTrigger extends Construct implements ITrigger {
+  public readonly discovery: DiscoveryAttachment;
+  public readonly source?: string;
 
   private readonly schedules: ScheduledTriggerEntry[];
 
@@ -107,8 +104,8 @@ export class ScheduledTrigger extends Construct implements IDiscoveryTrigger {
       }
       ids.add(entry.id);
     }
+    this.discovery = props.discovery;
     this.source = props.source;
-    this.plugin = props.plugin ?? new ScheduledStaticDiscoveryPlugin();
     this.schedules = props.schedules;
   }
 
@@ -135,8 +132,9 @@ export class ScheduledTrigger extends Construct implements IDiscoveryTrigger {
     }
   }
 
-  public grantRead(_role: iam.IRole): void {
-    // No resources owned by this trigger ─ its grants are on the schedule
-    // role, set up in `bind`.
+  public grantInvoke(_role: iam.IRole): void {
+    // The EventBridge Scheduler invoke permission is granted in `bind` onto
+    // this trigger's own scheduler role ─ nothing extra to grant against the
+    // discovery Lambda role here.
   }
 }
