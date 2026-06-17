@@ -112,9 +112,9 @@ Priority order:
 2. **Plugin-authoring docs** — `protocols.py` docstrings cover it but a top-level guide is missing.
 3. **Canary wiring** — Playwright code exists but TestingStack doesn't deploy a Synthetics canary.
 4. **`cdk-nag` re-enable** — currently off in `bin/app.ts` (TODO note). Public repo with cdk-nag off is a bad signal.
-5. **CDK assertion tests** — `packages/infra` has zero jest tests.
-6. **SNS topic on alarms** — three CloudWatch alarms exist; no targets.
-7. **At least one non-trivial DiscoveryBackend** — `StaticDiscovery` works but doesn't prove the model. Consider an `S3ManifestDiscovery` example.
+5. ~~**CDK assertion tests**~~ — done. `packages/infra/test/` has jest suites over the methodful `InspectorScanner` surface.
+6. ~~**SNS topic on alarms**~~ — `InspectorScanner.addAlarmAction()` routes an action to every owned alarm (DLQ depth, queue age, per-provider discovery failure). Wire it to an SNS topic in the stack.
+7. ~~**At least one non-trivial DiscoveryBackend**~~ — done. `S3ManifestDiscovery` (owns a manifest bucket, exercises IAM grants + an S3 event source) ships alongside `StaticDiscovery`.
 8. **ADOT layer ARNs only cover `us-east-1`/`us-west-2`** — `scanner-stack.ts` throws for other regions.
 9. **Slim seeder zip** — currently ships the full scanner Python package.
 10. **OSS hygiene files** — `SECURITY.md`, refreshed `CONTRIBUTING.md`, PR template.
