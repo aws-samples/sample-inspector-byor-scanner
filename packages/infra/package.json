@@ -4,6 +4,7 @@
   "private": true,
   "license": "MIT-0",
   "scripts": {
+    "test": "jest",
     "synth": "cdk synth --quiet",
     "deploy": "cdk deploy --all --require-approval never",
     "diff": "cdk diff",
@@ -34,6 +35,16 @@
         ],
         "outputs": [
           "{projectRoot}/cdk.out"
+        ]
+      },
+      "test": {
+        "cache": true,
+        "inputs": [
+          "default",
+          "^production"
+        ],
+        "outputs": [
+          "{workspaceRoot}/coverage/packages/infra"
         ]
       },
       "deploy": {
@@ -74,7 +85,10 @@
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.162",
+    "@types/jest": "^29.5.12",
     "aws-cdk": "^2.1126.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0"
   }
