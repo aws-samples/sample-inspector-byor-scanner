@@ -87,20 +87,26 @@ The first deploy takes ~6-8 min: CDK runs the Docker-based `skopeo` build inside
 
 ### Running an end-to-end scan
 
+The default sample stack wires an `S3ManifestDiscoveryProvider`: dropping a JSON
+manifest into its bucket fires a scan. Both bucket names are stack outputs.
+
 ```bash
-DISC=$(aws cloudformation describe-stacks --stack-name ScannerStack \
-  --query 'Stacks[0].Outputs[?OutputKey==`DiscoveryFunctionName`].OutputValue' --output text)
+MANIFEST=$(aws cloudformation describe-stacks --stack-name ScannerStack \
+  --query 'Stacks[0].Outputs[?OutputKey==`ManifestBucketName`].OutputValue' --output text)
 FINDINGS=$(aws cloudformation describe-stacks --stack-name ScannerStack \
   --query 'Stacks[0].Outputs[?OutputKey==`FindingsBucketName`].OutputValue' --output text)
 
-echo '{"mode":"manual","images":[{"image":"alpine","ref":"3.19"}]}' > /tmp/disc.json
-aws lambda invoke --function-name "$DISC" --payload fileb:///tmp/disc.json /tmp/out.json
+# The manifest is a JSON array of {image, ref[, registry]}. With no `registry`,
+# the scanner resolves the `default` registry.
+echo '[{"image":"library/alpine","ref":"3.19","registry":"public"}]' > /tmp/manifest.json
+aws s3 cp /tmp/manifest.json "s3://$MANIFEST/manifest.json"
 
-# Wait ~30 seconds, then look at S3:
+# Wait ~60 seconds, then look at S3:
 aws s3 ls "s3://$FINDINGS/findings/" --recursive
 ```
 
-You should see `findings/alpine/<short-digest>/<timestamp>.json` — that's CycloneDX 1.5 with a populated `vulnerabilities[]`.
+You should see `findings/library/alpine/<short-digest>/<timestamp>.json` — that's
+CycloneDX 1.5 with a populated `vulnerabilities[]`.
 
 ### Cleanup
 
@@ -121,8 +127,6 @@ The default `bin/app.ts` wires up the **sample** stacks (`BinaryStack` + `Testin
    import * as ec2 from 'aws-cdk-lib/aws-ec2';
    import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 
-   const binaries = new BinaryStack(app, 'BinaryStack', { env });
-
    new ScannerStack(app, 'ScannerStack', {
      env,
      // Your VPC — needs private subnets + egress to your registry and AWS APIs.
@@ -131,11 +135,10 @@ The default `bin/app.ts` wires up the **sample** stacks (`BinaryStack` + `Testin
      registryUrl: 'registry.internal.example.com',
      // Your pre-existing secret holding the mTLS material ({ca, cert, key} PEMs).
      mtlsSecret: secretsmanager.Secret.fromSecretNameV2(app, 'MtlsCerts', 'scanner/mtls'),
-     binaryLayer: binaries.binaryLayer,
    });
    ```
-   `vpc`, `registryUrl`, `mtlsSecret`, and `binaryLayer` are the required props. To target a non-mTLS registry, pass a custom `repositoryAuth`; to change how scans fire (scheduled vs. the default S3 manifest), pass a `trigger`. See [`ScannerStackProps`](packages/infra/lib/scanner-stack.ts) for all options.
-3. The same `BinaryStack` is reused; you do not need a separate testing flavor.
+   `vpc`, `registryUrl`, and `mtlsSecret` are the required props. To target a non-mTLS registry, pass a custom `repositoryAuth`. The stack wires an S3-manifest trigger by default; for full control (multiple registries, a scheduled trigger, custom discovery) instantiate `InspectorScanner` directly and use its `addRegistry` / `addDiscoveryProvider` / `addTrigger` methods. See [`ScannerStackProps`](packages/infra/lib/scanner-stack.ts) for all options.
+3. The scanner owns its skopeo + sbomgen layer; you do not need a `BinaryStack` for production.
 
 For a full step-by-step runbook — staging the mTLS secret, a dedicated `bin/prod.ts` entry point, triggering the first scan, and common failure modes — see [`docs/PRODUCTION_DEPLOY.md`](docs/PRODUCTION_DEPLOY.md).
 
