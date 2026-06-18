@@ -91,6 +91,13 @@ class DiscoveryBackend(Protocol):
       - ``ref`` (str): tag or digest (e.g. ``"latest"``, ``"v2.1"``,
         ``"sha256:abc..."``).
 
+    And MAY contain:
+
+      - ``registry`` (str): the configured registry id (from
+        ``addRegistry``) to pull this image from. Omit to use the default
+        registry (one named ``"default"``, or the sole configured registry).
+        When present, it must match a registry attached to the scanner.
+
     ## Writing a custom backend
 
     A custom backend is a plain class with a single method::
@@ -127,7 +134,9 @@ class DiscoveryBackend(Protocol):
             invocation); the plugin owns parsing it. ``source`` is the
             trigger's logical id; the plugin SHOULD ignore it for control
             flow (the handler already routes by plugin selection).
-        :returns: List of dicts with ``image`` and ``ref`` keys.
+        :returns: List of dicts with required ``image`` and ``ref`` keys, and
+            an optional ``registry`` key (a configured registry id; omit to use
+            the default registry).
         """
         ...
 
