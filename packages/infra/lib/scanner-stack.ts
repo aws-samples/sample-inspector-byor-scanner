@@ -1,12 +1,10 @@
 import { CfnOutput, Duration, Stack, StackProps } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import {
   InspectorScanner,
@@ -164,30 +162,9 @@ export class ScannerStack extends Stack {
         'Drop a JSON manifest (array of {image, ref}) here to fire a scan.',
     });
 
-    // ─── Application Signals discovery + observability ─────────────────
-    // Application Signals must be enabled at the account level before it
-    // surfaces the instrumented Lambdas as services for the SLOs to bind
-    // to. StartDiscovery is idempotent and account-wide.
-    new cr.AwsCustomResource(this, 'AppSignalsDiscovery', {
-      onUpdate: {
-        service: 'application-signals',
-        action: 'StartDiscovery',
-        physicalResourceId: cr.PhysicalResourceId.of('app-signals-discovery'),
-      },
-      installLatestAwsSdk: true,
-      policy: cr.AwsCustomResourcePolicy.fromStatements([
-        new iam.PolicyStatement({
-          actions: [
-            'application-signals:StartDiscovery',
-            'iam:CreateServiceLinkedRole',
-          ],
-          resources: ['*'],
-        }),
-      ]),
-    });
-
-    // SLOs (+ per-operation alarms) and the CloudWatch dashboard are owned by
-    // the InspectorScanner construct (scanner.observability).
+    // Observability — SLOs, dashboard, alarms, and Application Signals
+    // discovery enablement — is owned by the InspectorScanner construct
+    // (scanner.observability).
 
     // ─── Outputs ───────────────────────────────────────────────────────
     // FindingsBucketName / ScanQueueUrl / ScanDLQUrl / ScannerFunctionName are

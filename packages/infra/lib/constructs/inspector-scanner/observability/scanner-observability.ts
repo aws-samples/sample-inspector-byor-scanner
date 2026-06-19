@@ -1,7 +1,9 @@
 import { Duration, Stack } from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import { METRIC_NAMESPACE, SCANNER_SERVICE } from './constants';
 import { ScannerSlos } from './scanner-slos';
@@ -62,6 +64,25 @@ export interface ScannerCoreProps {
    * but does not consume it. @default Duration.minutes(5)
    */
   readonly discoveryTimeout?: Duration;
+}
+
+/** Inputs for the eager per-provider tier ({@link ScannerObservability.monitorProvider}). */
+export interface ProviderMonitorProps {
+  /** Provider id (becomes part of the alarm's construct id). */
+  readonly id: string;
+  /** The provider's `source` (metric dimension); used for per-provider SLOs in the follow-up PR. */
+  readonly source: string;
+  /** The provider's dedicated discovery Lambda — its errors back the failure alarm. */
+  readonly discoveryFunction: lambda.IFunction;
+}
+
+/**
+ * Handle returned by {@link ScannerObservability.monitorProvider}. Carries the
+ * per-provider failure alarm; availability/latency SLOs are added to it in the
+ * follow-up PR.
+ */
+export interface ProviderMonitor {
+  readonly failureAlarm: cloudwatch.Alarm;
 }
 
 /**
@@ -134,6 +155,27 @@ export class ScannerObservability extends Construct {
    * relocates the DLQ-depth / queue-age alarms here from the L3.
    */
   public monitorScannerCore(props: ScannerCoreProps): void {
+    // Enable Application Signals discovery at the account level so the
+    // instrumented Lambdas surface as services for the SLOs to bind to.
+    // StartDiscovery is idempotent and account-wide.
+    new cr.AwsCustomResource(this, 'AppSignalsDiscovery', {
+      onUpdate: {
+        service: 'application-signals',
+        action: 'StartDiscovery',
+        physicalResourceId: cr.PhysicalResourceId.of('app-signals-discovery'),
+      },
+      installLatestAwsSdk: true,
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: [
+            'application-signals:StartDiscovery',
+            'iam:CreateServiceLinkedRole',
+          ],
+          resources: ['*'],
+        }),
+      ]),
+    });
+
     // System SLOs + per-operation alarms; register the alarms so addAlarmAction
     // routes them (no SNS topic is created).
     const slos = new ScannerSlos(this, 'Slos', {
@@ -197,6 +239,35 @@ export class ScannerObservability extends Construct {
    */
   public registerAlarm(alarm: cloudwatch.Alarm): void {
     this.alarms.register(alarm);
+  }
+
+  /**
+   * Build the eager per-provider tier for one discovery provider: its failure
+   * alarm (registered so `addAlarmAction` routes it). The follow-up PR adds
+   * availability/latency SLOs to the returned handle. Called from
+   * {@link InspectorScanner.addDiscoveryProvider}.
+   */
+  public monitorProvider(props: ProviderMonitorProps): ProviderMonitor {
+    const failureAlarm = new cloudwatch.Alarm(
+      this,
+      `Discovery${props.id}FailureAlarm`,
+      {
+        alarmDescription:
+          `Discovery provider '${props.id}' failed - no images were enqueued ` +
+          'for at least one cycle. The scanner is silently not running for ' +
+          'this source.',
+        metric: props.discoveryFunction.metricErrors({
+          period: PERIOD,
+          statistic: cloudwatch.Stats.SUM,
+        }),
+        threshold: 0,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 1,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      },
+    );
+    this.registerAlarm(failureAlarm);
+    return { failureAlarm };
   }
 
   /** Every alarm the facade owns/tracks, for introspection and composition. */

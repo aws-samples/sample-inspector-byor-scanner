@@ -597,30 +597,19 @@ export class InspectorScanner extends Construct {
       ),
     );
 
-    // Per-provider failure alarm, carried on the returned handle so callers
-    // can route actions to it.
-    const failureAlarm = new cloudwatch.Alarm(this, `Discovery${id}FailureAlarm`, {
-      alarmDescription:
-        `Discovery provider '${id}' failed - no images were enqueued for at ` +
-        'least one cycle. The scanner is silently not running for this source.',
-      metric: fn.metricErrors({
-        period: Duration.minutes(5),
-        statistic: cloudwatch.Stats.SUM,
-      }),
-      threshold: 0,
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      evaluationPeriods: 1,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    // Per-provider observability (failure alarm now; availability/latency SLOs
+    // in the follow-up PR), owned by the facade and carried on the handle.
+    const monitor = this.observability.monitorProvider({
+      id,
+      source,
+      discoveryFunction: fn,
     });
-    // Register with the observability facade for introspection + so any alarm
-    // actions added before this provider get replayed onto it.
-    this.observability.registerAlarm(failureAlarm);
 
     const attachment: DiscoveryAttachment = {
       id,
       source,
       discoveryFunction: fn,
-      failureAlarm,
+      failureAlarm: monitor.failureAlarm,
     };
     this.discoveryProviderMap.set(id, attachment);
     this.discoverySources.add(source);
