@@ -92,11 +92,11 @@ class ScanRequest:
     registry_id: str = "default"
 
 
-def _emit_outcome(name: str, source: str, registry_id: str) -> None:
-    """Emit a count of ``name`` plus copies dimensioned by ``source`` and ``registry``.
+def _emit_outcome(name: str, source: str) -> None:
+    """Emit a count of ``name`` plus a copy dimensioned by ``source``.
 
     The aggregate ``add_metric`` keeps the global service-level series
-    untouched (today's dashboards keep working). Each ``single_metric`` writes
+    untouched (today's dashboards keep working). The ``single_metric`` writes
     a dimensioned copy as its own EMF blob so the dimension does not bleed onto
     the other metrics emitted during this invocation.
     """
@@ -108,13 +108,6 @@ def _emit_outcome(name: str, source: str, registry_id: str) -> None:
         value=1,
     ) as metric:
         metric.add_dimension(name="source", value=source)
-    with single_metric(
-        namespace=METRIC_NAMESPACE,
-        name=name,
-        unit=MetricUnit.Count,
-        value=1,
-    ) as metric:
-        metric.add_dimension(name="registry", value=registry_id)
 
 
 def ensure_policy_json() -> None:
@@ -166,7 +159,7 @@ def scan_image(req: ScanRequest) -> dict[str, Any]:
                 "sizeBytes": size,
             },
         )
-        _emit_outcome("ImagesSkipped", req.source, req.registry_id)
+        _emit_outcome("ImagesSkipped", req.source)
         return {"outcome": "skipped", "reason": "too_large"}
 
     # Stage 2: SBOM cache check (only meaningful when ref is a digest)
@@ -219,7 +212,7 @@ def scan_image(req: ScanRequest) -> dict[str, Any]:
         # Metrics
         vulns = findings.get("vulnerabilities", [])
         severity_counts = _count_by_severity(vulns)
-        _emit_outcome("ImagesScanned", req.source, req.registry_id)
+        _emit_outcome("ImagesScanned", req.source)
         metrics.add_metric(
             name="VulnerabilitiesFound", unit=MetricUnit.Count, value=len(vulns)
         )

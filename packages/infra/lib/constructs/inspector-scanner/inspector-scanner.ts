@@ -17,7 +17,7 @@ import {
   BinaryLayer,
 } from '@constructs/binary-layer';
 import { IRepositoryAuth } from './auth';
-import { METRIC_NAMESPACE, SCANNER_SERVICE, ScannerObservability } from './observability';
+import { METRIC_NAMESPACE, ObservabilityOptions, SCANNER_SERVICE, ScannerObservability, adotPythonLayer } from './observability';
 import {
   DiscoveryAttachment,
   IDiscoveryProvider,
@@ -61,20 +61,6 @@ const ENV_FINDINGS_BUCKET = 'BYOR_FINDINGS_BUCKET';
 const ENV_QUEUE_URL = 'BYOR_QUEUE_URL';
 const ENV_DISCOVERY_BACKEND = 'BYOR_DISCOVERY_BACKEND';
 const ENV_TRIGGER_SOURCE = 'BYOR_TRIGGER_SOURCE';
-
-/**
- * ADOT (AWS Distro for OpenTelemetry) Python layer. Provides Application
- * Signals + auto-instrumentation. Account 615299751070 is AWS-owned.
- *
- * NOTE: ARNs are region-specific. Layer revisions advance independently per
- * region; refresh quarterly.
- */
-const ADOT_LAYER_ARNS: Record<string, string> = {
-  'us-west-2':
-    'arn:aws:lambda:us-west-2:615299751070:layer:AWSOpenTelemetryDistroPython:29',
-  'us-east-1':
-    'arn:aws:lambda:us-east-1:615299751070:layer:AWSOpenTelemetryDistroPython:25',
-};
 
 /**
  * Configuration for a single container registry attached via
@@ -144,6 +130,9 @@ export interface InspectorScannerProps {
   readonly sqsBatchSize?: number;
   /** SQS event source mapping max concurrency. Defaults to 10. */
   readonly sqsMaxConcurrency?: number;
+
+  /** Observability tuning knobs (dashboard toggle, SLO goals, etc.). */
+  readonly observability?: ObservabilityOptions;
 }
 
 /**
@@ -217,7 +206,7 @@ export class InspectorScanner extends Construct {
   /**
    * The scanner's observability facade: SLOs, dashboard, and the alarm registry.
    * Exposed so consumers can reach `addSegment` / `monitorCustom` / `dashboard` /
-   * `slos` / `createdAlarms`; the L3 forwards only {@link addAlarmAction}. Owns
+   * `slos` / `createdAlarms`; InspectorScanner forwards only {@link addAlarmAction}. Owns
    * every alarm the scanner creates (DLQ depth, queue age, and each per-provider
    * discovery failure alarm) via {@link ScannerObservability.registerAlarm}, so a
    * single {@link addAlarmAction} routes them all, including providers added later.
@@ -239,7 +228,9 @@ export class InspectorScanner extends Construct {
 
     this.registries = this.registryMap;
     this.discoveryProviders = this.discoveryProviderMap;
-    this.observability = new ScannerObservability(this, 'Observability');
+    this.observability = new ScannerObservability(this, 'Observability', {
+      defaults: props.observability,
+    });
 
     const scannerTimeout = props.scannerTimeout ?? Duration.minutes(15);
     const scannerMemoryMiB = props.scannerMemoryMiB ?? 6144;
@@ -283,20 +274,7 @@ export class InspectorScanner extends Construct {
     });
 
     // ─── ADOT layer ──────────────────────────────────────────────────────
-    const region = Stack.of(this).region;
-    const adotLayerArn = ADOT_LAYER_ARNS[region];
-    if (!adotLayerArn) {
-      throw new Error(
-        `ADOT layer ARN unknown for region ${region}. Add it to ` +
-          `ADOT_LAYER_ARNS in inspector-scanner.ts. See ` +
-          `docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Application-Signals-Lambda.html`,
-      );
-    }
-    const adotLayer = lambda.LayerVersion.fromLayerVersionArn(
-      this,
-      'AdotLayer',
-      adotLayerArn,
-    );
+    const adotLayer = adotPythonLayer(this, 'AdotLayer', Stack.of(this).region);
 
     // ─── Owned binary layer (skopeo + sbomgen) ───────────────────────────
     // The construct OWNS its binary layer rather than receiving one as a prop.
@@ -597,8 +575,8 @@ export class InspectorScanner extends Construct {
       ),
     );
 
-    // Per-provider observability (failure alarm now; availability/latency SLOs
-    // in the follow-up PR), owned by the facade and carried on the handle.
+    // Per-provider observability (failure alarm + dashboard widgets), owned by
+    // the facade and carried on the handle.
     const monitor = this.observability.monitorProvider({
       id,
       source,
