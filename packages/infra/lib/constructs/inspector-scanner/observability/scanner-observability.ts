@@ -5,8 +5,12 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
-import { METRIC_NAMESPACE, SCANNER_SERVICE } from './constants';
 import { ScannerSlos } from './scanner-slos';
+import {
+  DiscoverySegment,
+  IDashboardSegment,
+  ScannerCoreSegment,
+} from './segment';
 import { BaseSlo } from './slo';
 
 const PERIOD = Duration.minutes(5);
@@ -219,7 +223,7 @@ export class ScannerObservability extends Construct {
       }),
     );
 
-    this.buildDashboard(props.scannerFunction);
+    this.renderSegment(new ScannerCoreSegment(props.scannerFunction));
   }
 
   /**
@@ -267,6 +271,7 @@ export class ScannerObservability extends Construct {
       },
     );
     this.registerAlarm(failureAlarm);
+    this.renderSegment(new DiscoverySegment(props.source, failureAlarm));
     return { failureAlarm };
   }
 
@@ -277,163 +282,29 @@ export class ScannerObservability extends Construct {
 
   // ─── internals ───────────────────────────────────────────────────────
 
-  private buildDashboard(scannerFunction: lambda.IFunction): void {
-    if (this.opts.dashboard === false) return;
+  /**
+   * Lazily create the BYORScan dashboard. The name stays region-qualified
+   * because CloudWatch dashboard names are account-global. Returns undefined
+   * when `dashboard: false`.
+   */
+  private ensureDashboard(): cloudwatch.Dashboard | undefined {
+    if (this.opts.dashboard === false) return undefined;
+    if (!this.dashboard) {
+      this.dashboard = new cloudwatch.Dashboard(this, 'Dashboard', {
+        dashboardName: `BYORScan-${Stack.of(this).region}`,
+      });
+    }
+    return this.dashboard;
+  }
 
-    const logGroup = `/aws/lambda/${scannerFunction.functionName}`;
-    // Dashboards are account-global, so the name MUST stay region-qualified to
-    // avoid collisions when the stack is deployed to multiple regions.
-    const dashboard = new cloudwatch.Dashboard(this, 'Dashboard', {
-      dashboardName: `BYORScan-${Stack.of(this).region}`,
-    });
-    this.dashboard = dashboard;
-
-    // ─── Logs Insights widgets ─────────────────────────────────────────
-    dashboard.addWidgets(
-      new cloudwatch.LogQueryWidget({
-        title: 'Top 10 Images by Critical Findings',
-        logGroupNames: [logGroup],
-        queryLines: [
-          'filter outcome = "success"',
-          'stats latest(ref) as Ref, latest(findingsCritical) as Critical, latest(findingsHigh) as High, latest(findingsMedium) as Medium, latest(findingsLow) as Low, latest(findingsTotal) as Total, latest(digest) as Digest, latest(findingsKey) as FindingsURL by image',
-          'sort Critical desc',
-          'limit 10',
-        ],
-        width: 24,
-        height: 8,
-      }),
-    );
-
-    dashboard.addWidgets(
-      new cloudwatch.LogQueryWidget({
-        title: 'All Images — Latest Findings',
-        logGroupNames: [logGroup],
-        queryLines: [
-          'filter outcome = "success"',
-          'stats latest(ref) as Ref, latest(findingsCritical) as Critical, latest(findingsHigh) as High, latest(findingsMedium) as Medium, latest(findingsLow) as Low, latest(findingsTotal) as Total, latest(digest) as Digest, latest(findingsKey) as FindingsURL by image',
-          'sort Critical desc',
-          'limit 1000',
-        ],
-        width: 24,
-        height: 8,
-      }),
-    );
-
-    dashboard.addWidgets(
-      new cloudwatch.LogQueryWidget({
-        title: 'Recent Failed Images',
-        logGroupNames: [logGroup],
-        // Failures log "Scan failed" with an errorCode (no outcome field).
-        queryLines: [
-          'filter message = "Scan failed"',
-          'stats count(*) as failCount, latest(errorCode) as lastError, latest(traceUrl) as Trace, max(@timestamp) as lastFailed by image, ref',
-          'sort lastFailed desc',
-          'limit 50',
-        ],
-        width: 24,
-        height: 6,
-      }),
-    );
-
-    // ─── Metric graph widgets ──────────────────────────────────────────
-    const scannerDimensions = { service: SCANNER_SERVICE };
-
-    dashboard.addWidgets(
-      new cloudwatch.GraphWidget({
-        title: 'Scan Volume',
-        left: [
-          new cloudwatch.Metric({
-            namespace: METRIC_NAMESPACE,
-            metricName: 'ImagesScanned',
-            dimensionsMap: scannerDimensions,
-            statistic: cloudwatch.Stats.SUM,
-            period: PERIOD,
-            label: 'Scanned',
-          }),
-        ],
-        right: [
-          new cloudwatch.Metric({
-            namespace: METRIC_NAMESPACE,
-            metricName: 'ImagesFailed',
-            dimensionsMap: scannerDimensions,
-            statistic: cloudwatch.Stats.SUM,
-            period: PERIOD,
-            label: 'Failed',
-          }),
-        ],
-        width: 12,
-        height: 6,
-      }),
-      new cloudwatch.GraphWidget({
-        title: 'Scan Success Rate (%)',
-        left: [
-          new cloudwatch.MathExpression({
-            expression: 'IF(scanned + failed > 0, 100 * scanned / (scanned + failed), 100)',
-            usingMetrics: {
-              scanned: new cloudwatch.Metric({
-                namespace: METRIC_NAMESPACE,
-                metricName: 'ImagesScanned',
-                dimensionsMap: scannerDimensions,
-                statistic: cloudwatch.Stats.SUM,
-                period: PERIOD,
-              }),
-              failed: new cloudwatch.Metric({
-                namespace: METRIC_NAMESPACE,
-                metricName: 'ImagesFailed',
-                dimensionsMap: scannerDimensions,
-                statistic: cloudwatch.Stats.SUM,
-                period: PERIOD,
-              }),
-            },
-            label: 'Success %',
-            period: PERIOD,
-          }),
-        ],
-        leftYAxis: { min: 0, max: 100 },
-        width: 12,
-        height: 6,
-      }),
-    );
-
-    dashboard.addWidgets(
-      new cloudwatch.GraphWidget({
-        title: 'Discovery Volume',
-        left: [
-          new cloudwatch.MathExpression({
-            expression:
-              'SUM(SEARCH(\'{BYORScan,source,service} MetricName="ImagesEnqueued"\', \'Sum\', 300))',
-            usingMetrics: {},
-            label: 'Enqueued (all sources)',
-            period: PERIOD,
-          }),
-        ],
-        width: 12,
-        height: 6,
-      }),
-      new cloudwatch.GraphWidget({
-        title: 'Scan Duration',
-        left: [
-          new cloudwatch.Metric({
-            namespace: METRIC_NAMESPACE,
-            metricName: 'ScanDuration',
-            dimensionsMap: scannerDimensions,
-            statistic: 'p50',
-            period: PERIOD,
-            label: 'p50',
-          }),
-          new cloudwatch.Metric({
-            namespace: METRIC_NAMESPACE,
-            metricName: 'ScanDuration',
-            dimensionsMap: scannerDimensions,
-            statistic: 'p99',
-            period: PERIOD,
-            label: 'p99',
-          }),
-        ],
-        leftYAxis: { label: 'ms', min: 0 },
-        width: 12,
-        height: 6,
-      }),
-    );
+  /**
+   * Render a segment onto the dashboard — one dashboard row per widget the
+   * segment returns. Core renders eagerly from `monitorScannerCore`; each
+   * provider appends its row from `monitorProvider`.
+   */
+  private renderSegment(segment: IDashboardSegment): void {
+    const dashboard = this.ensureDashboard();
+    if (!dashboard) return;
+    for (const widget of segment.widgets()) dashboard.addWidgets(widget);
   }
 }
