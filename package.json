@@ -12,13 +12,13 @@
     "clean": "rm -rf packages/*/dist packages/*/cdk.out packages/*/.aws-sam packages/*/tsconfig.tsbuildinfo coverage reports && nx reset"
   },
   "devDependencies": {
-    "@nx/eslint": "22.7.5",
-    "@nx/eslint-plugin": "22.7.5",
-    "@nx/js": "22.7.5",
+    "@nx/eslint": "23.0.0",
+    "@nx/eslint-plugin": "23.0.0",
+    "@nx/js": "23.0.0",
     "@nxlv/python": "^22.2.0",
     "@types/node": "^25.9.3",
     "eslint": "^10.4.1",
-    "nx": "22.7.5",
+    "nx": "23.0.0",
     "prettier": "^3.8.4",
     "typescript": "~6.0.3"
   },
