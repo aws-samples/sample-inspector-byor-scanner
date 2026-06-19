@@ -17,7 +17,7 @@ import {
   BinaryLayer,
 } from '@constructs/binary-layer';
 import { IRepositoryAuth } from './auth';
-import { ScannerObservability } from './observability';
+import { METRIC_NAMESPACE, SCANNER_SERVICE, ScannerObservability } from './observability';
 import {
   DiscoveryAttachment,
   IDiscoveryProvider,
@@ -675,8 +675,12 @@ export class InspectorScanner extends Construct {
     opts?: cloudwatch.MetricOptions,
   ): cloudwatch.Metric {
     return new cloudwatch.Metric({
-      namespace: 'BYORScan',
+      namespace: METRIC_NAMESPACE,
       metricName: 'ImagesFailed',
+      // Scope to the Powertools `service` default dimension so this reads the
+      // same series the dashboard graphs. The dimensionless ImagesFailed metric
+      // has no data — every emitted datapoint carries at least `service`.
+      dimensionsMap: { service: SCANNER_SERVICE },
       statistic: cloudwatch.Stats.SUM,
       period: Duration.minutes(5),
       ...opts,

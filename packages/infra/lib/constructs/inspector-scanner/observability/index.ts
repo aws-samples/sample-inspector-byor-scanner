@@ -18,3 +18,9 @@ export {
   ScannerCoreProps,
   ObservabilityOptions,
 } from './scanner-observability';
+export {
+  IDashboardSegment,
+  ScannerCoreSegment,
+  DiscoverySegment,
+} from './segment';
+export { METRIC_NAMESPACE, SCANNER_SERVICE, DISCOVERY_SERVICE } from './constants';
