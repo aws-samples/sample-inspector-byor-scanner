@@ -181,8 +181,9 @@ describe('InspectorScanner methodful surface (end-to-end)', () => {
     );
 
     const template = Template.fromStack(stack);
-    // DLQ-depth + queue-age (foundational) + one per-provider failure alarm.
-    template.resourceCountIs('AWS::CloudWatch::Alarm', 3);
+    // DLQ-depth + queue-age (coarse) + 5 per-stage + 2 SLO burn-rate (scanner
+    // core) + 1 per-provider discovery failure alarm.
+    template.resourceCountIs('AWS::CloudWatch::Alarm', 10);
     // Every alarm carries the action ARN.
     const alarms = template.findResources('AWS::CloudWatch::Alarm');
     for (const alarm of Object.values(alarms)) {

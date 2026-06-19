@@ -18,7 +18,6 @@ import {
   ScheduledStaticDiscoveryProvider,
   ScheduledTrigger,
 } from '@constructs/inspector-scanner';
-import { Observability } from './constructs/inspector-scanner/observability';
 
 export interface ScannerStackProps extends StackProps {
   /** VPC the Lambdas attach to. Must have private subnets and egress for AWS APIs. */
@@ -81,7 +80,6 @@ export class ScannerStack extends Stack {
     super(scope, id, props);
 
     const scannerTimeout = props.scannerTimeout ?? Duration.minutes(15);
-    const discoveryTimeout = Duration.minutes(5);
 
     const repositoryAuth =
       props.repositoryAuth ??
@@ -188,13 +186,8 @@ export class ScannerStack extends Stack {
       ]),
     });
 
-    // SLOs (+ per-operation alarms) and the CloudWatch dashboard.
-    new Observability(this, 'Observability', {
-      scannerFunction: this.scannerFunction,
-      queue: this.scanQueue,
-      scannerTimeout,
-      discoveryTimeout,
-    });
+    // SLOs (+ per-operation alarms) and the CloudWatch dashboard are owned by
+    // the InspectorScanner construct (scanner.observability).
 
     // ─── Outputs ───────────────────────────────────────────────────────
     // FindingsBucketName / ScanQueueUrl / ScanDLQUrl / ScannerFunctionName are

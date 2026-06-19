@@ -1,8 +1,6 @@
 import { Duration } from 'aws-cdk-lib';
 import * as applicationsignals from 'aws-cdk-lib/aws-applicationsignals';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
-import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
-import * as sns from 'aws-cdk-lib/aws-sns';
 import { Construct } from 'constructs';
 
 /** Application Signals SLI comparison operators. */
@@ -33,10 +31,12 @@ export interface SloBaseProps {
   readonly burnRateWindows?: Duration[];
 
   /**
-   * SNS topic for a burn-rate alarm on the first look-back window.
-   * @default - no alarm is created (the SLO is an attainment objective only)
+   * Create a burn-rate alarm on the first look-back window. The alarm carries
+   * no action of its own; route it via the observability facade's
+   * `addAlarmAction`.
+   * @default false (the SLO is an attainment objective only)
    */
-  readonly alarmTopic?: sns.ITopic;
+  readonly burnRateAlarm?: boolean;
 }
 
 /** The SLI portion of an SLO — exactly one is supplied by each subclass. */
@@ -242,7 +242,7 @@ function createBurnRateAlarm(
   props: SloBaseProps,
   firstWindowMinutes: string,
 ): cloudwatch.Alarm | undefined {
-  if (!props.alarmTopic) {
+  if (!props.burnRateAlarm) {
     return undefined;
   }
 
@@ -263,6 +263,5 @@ function createBurnRateAlarm(
     evaluationPeriods: 1,
     treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
   });
-  alarm.addAlarmAction(new cloudwatchActions.SnsAction(props.alarmTopic));
   return alarm;
 }

@@ -1,6 +1,5 @@
 import { Duration } from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
-import * as sns from 'aws-cdk-lib/aws-sns';
 import { Construct } from 'constructs';
 import { METRIC_NAMESPACE } from './constants';
 import { MetricAlarm } from './metric-alarm';
@@ -17,37 +16,40 @@ const STAGE_ALARMS: ReadonlyArray<readonly [string, string]> = [
   ['Delivery', 'Delivery'],
 ];
 
-export interface ScannerAlarmsProps {
-  /** SNS topic that every per-operation alarm notifies. */
-  readonly alarmTopic: sns.ITopic;
-}
-
 /**
  * Per-operation scanner alarms — one per pipeline stage. Each fires when
  * `ImagesFailed` with that stage dimension appears at least twice in 3 of
  * 5 five-minute periods, suppressing single-image flakiness while catching
  * sustained failure modes.
+ *
+ * The alarms carry no action; they are exposed via {@link alarms} so the
+ * observability facade registers them and routes actions through
+ * `addAlarmAction` (no SNS topic is created here).
  */
 export class ScannerAlarms extends Construct {
-  constructor(scope: Construct, id: string, props: ScannerAlarmsProps) {
+  /** The per-stage alarms, for the facade to register and route. */
+  public readonly alarms: cloudwatch.Alarm[] = [];
+
+  constructor(scope: Construct, id: string) {
     super(scope, id);
 
     for (const [name, stage] of STAGE_ALARMS) {
-      new MetricAlarm(this, name, {
-        alarmName: `byor-scanner-${stage}`,
-        alarmDescription: `${stage} stage failures detected on the scanner`,
-        metric: new cloudwatch.Metric({
-          namespace: METRIC_NAMESPACE,
-          metricName: 'ImagesFailed',
-          dimensionsMap: { stage },
-          statistic: cloudwatch.Stats.SUM,
-          period: Duration.minutes(5),
-        }),
-        threshold: 2,
-        evaluationPeriods: 5,
-        datapointsToAlarm: 3,
-        alarmTopic: props.alarmTopic,
-      });
+      this.alarms.push(
+        new MetricAlarm(this, name, {
+          alarmName: `byor-scanner-${stage}`,
+          alarmDescription: `${stage} stage failures detected on the scanner`,
+          metric: new cloudwatch.Metric({
+            namespace: METRIC_NAMESPACE,
+            metricName: 'ImagesFailed',
+            dimensionsMap: { stage },
+            statistic: cloudwatch.Stats.SUM,
+            period: Duration.minutes(5),
+          }),
+          threshold: 2,
+          evaluationPeriods: 5,
+          datapointsToAlarm: 3,
+        }).alarm,
+      );
     }
   }
 }
