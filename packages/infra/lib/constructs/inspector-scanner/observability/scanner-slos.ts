@@ -1,6 +1,5 @@
 import { Duration } from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
-import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import {
@@ -32,12 +31,6 @@ export interface ScannerSlosProps {
 
   /** Discovery Lambda timeout. */
   readonly discoveryTimeout: Duration;
-
-  /**
-   * SNS topic for burn-rate and per-operation alarms.
-   * @default - a new `byor-scanner-slo-alarms` topic is created
-   */
-  readonly alarmTopic?: sns.ITopic;
 }
 
 /**
@@ -47,18 +40,19 @@ export interface ScannerSlosProps {
  * compatibility. Service-level availability and latency SLOs are managed
  * directly by Application Signals (SLO-by-service) and do not need
  * explicit CDK definitions.
+ *
+ * No SNS topic is created here. Every alarm this construct owns (per-stage +
+ * SLO burn-rate) is exposed via {@link alarms} so the observability facade
+ * registers them and routes actions through `addAlarmAction`.
  */
 export class ScannerSlos extends Construct {
-  public readonly alarmTopic: sns.ITopic;
+  /** Every alarm this construct owns, for the facade to register and route. */
+  public readonly alarms: cloudwatch.Alarm[];
 
   constructor(scope: Construct, id: string, props: ScannerSlosProps) {
     super(scope, id);
 
-    this.alarmTopic =
-      props.alarmTopic ??
-      new sns.Topic(this, 'AlarmTopic', { topicName: 'byor-scanner-slo-alarms' });
-
-    new ScannerAlarms(this, 'PerOperationAlarms', { alarmTopic: this.alarmTopic });
+    const perOperation = new ScannerAlarms(this, 'PerOperationAlarms');
 
     // ─── System SLOs ───────────────────────────────────────────────────
     new PeriodSlo(this, 'ScanFreshness', {
@@ -77,7 +71,7 @@ export class ScannerSlos extends Construct {
       // Attainment-only: a burn-rate alarm would duplicate QueueAgeAlarm.
     });
 
-    new PeriodSlo(this, 'NewImageCoverage', {
+    const coverage = new PeriodSlo(this, 'NewImageCoverage', {
       sloName: 'byor-new-image-coverage',
       description: 'p99 scan duration under 60 minutes',
       metric: new cloudwatch.Metric({
@@ -90,10 +84,10 @@ export class ScannerSlos extends Construct {
       threshold: SIXTY_MINUTES_MS,
       attainmentGoal: 99,
       burnRateWindows: SYSTEM_BURN_RATE_WINDOWS,
-      alarmTopic: this.alarmTopic,
+      burnRateAlarm: true,
     });
 
-    new RequestBasedSlo(this, 'ImageCompatibility', {
+    const compatibility = new RequestBasedSlo(this, 'ImageCompatibility', {
       sloName: 'byor-image-compatibility',
       description: '>=95% of images are scannable (not skipped)',
       totalRequestCountMetric: [
@@ -143,7 +137,14 @@ export class ScannerSlos extends Construct {
       attainmentGoal: 95,
       warningThreshold: 90,
       burnRateWindows: SYSTEM_BURN_RATE_WINDOWS,
-      alarmTopic: this.alarmTopic,
+      burnRateAlarm: true,
     });
+
+    this.alarms = [
+      ...perOperation.alarms,
+      ...[coverage.alarm, compatibility.alarm].filter(
+        (a): a is cloudwatch.Alarm => a !== undefined,
+      ),
+    ];
   }
 }

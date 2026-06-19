@@ -134,11 +134,48 @@ export class ScannerObservability extends Construct {
    * relocates the DLQ-depth / queue-age alarms here from the L3.
    */
   public monitorScannerCore(props: ScannerCoreProps): void {
-    new ScannerSlos(this, 'Slos', {
+    // System SLOs + per-operation alarms; register the alarms so addAlarmAction
+    // routes them (no SNS topic is created).
+    const slos = new ScannerSlos(this, 'Slos', {
       queue: props.queue,
       scannerTimeout: props.scannerTimeout,
       discoveryTimeout: props.discoveryTimeout ?? Duration.minutes(5),
     });
+    for (const alarm of slos.alarms) this.registerAlarm(alarm);
+
+    // Coarse operational alarms (owned by the facade; the per-provider discovery
+    // failure alarms are registered from InspectorScanner.addDiscoveryProvider).
+    this.registerAlarm(
+      new cloudwatch.Alarm(this, 'DlqDepthAlarm', {
+        alarmDescription:
+          'DLQ has at least one message - a scan was permanently abandoned. ' +
+          'Investigate via CloudWatch Logs Insights filtered by the message body.',
+        metric: props.dlq.metricApproximateNumberOfMessagesVisible({
+          period: PERIOD,
+          statistic: cloudwatch.Stats.MAXIMUM,
+        }),
+        threshold: 0,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 1,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      }),
+    );
+
+    this.registerAlarm(
+      new cloudwatch.Alarm(this, 'QueueAgeAlarm', {
+        alarmDescription:
+          'SQS oldest message age > 14h. The scanner Lambda is not keeping ' +
+          'up with the discovery rate. Check scanner errors and concurrency.',
+        metric: props.queue.metricApproximateAgeOfOldestMessage({
+          period: PERIOD,
+          statistic: cloudwatch.Stats.MAXIMUM,
+        }),
+        threshold: 14 * 60 * 60,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 3,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      }),
+    );
 
     this.buildDashboard(props.scannerFunction);
   }

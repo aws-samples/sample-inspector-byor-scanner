@@ -17,6 +17,7 @@ import {
   BinaryLayer,
 } from '@constructs/binary-layer';
 import { IRepositoryAuth } from './auth';
+import { ScannerObservability } from './observability';
 import {
   DiscoveryAttachment,
   IDiscoveryProvider,
@@ -214,17 +215,14 @@ export class InspectorScanner extends Construct {
   private readonly attachedAuthLayers = new Set<lambda.ILayerVersion>();
 
   /**
-   * Every alarm the construct owns (DLQ depth, queue age, and each per-provider
-   * discovery failure alarm). {@link addAlarmAction} routes actions to all of
-   * them, including providers added after the call.
+   * The scanner's observability facade: SLOs, dashboard, and the alarm registry.
+   * Exposed so consumers can reach `addSegment` / `monitorCustom` / `dashboard` /
+   * `slos` / `createdAlarms`; the L3 forwards only {@link addAlarmAction}. Owns
+   * every alarm the scanner creates (DLQ depth, queue age, and each per-provider
+   * discovery failure alarm) via {@link ScannerObservability.registerAlarm}, so a
+   * single {@link addAlarmAction} routes them all, including providers added later.
    */
-  private readonly alarms: cloudwatch.Alarm[] = [];
-
-  /**
-   * Alarm actions registered via {@link addAlarmAction}, replayed onto alarms
-   * created later by {@link addDiscoveryProvider} so call order doesn't matter.
-   */
-  private readonly alarmActions: cloudwatch.IAlarmAction[] = [];
+  public readonly observability: ScannerObservability;
 
   /**
    * Config captured at construction (VPC, ADOT layer, common env) and reused by
@@ -241,6 +239,7 @@ export class InspectorScanner extends Construct {
 
     this.registries = this.registryMap;
     this.discoveryProviders = this.discoveryProviderMap;
+    this.observability = new ScannerObservability(this, 'Observability');
 
     const scannerTimeout = props.scannerTimeout ?? Duration.minutes(15);
     const scannerMemoryMiB = props.scannerMemoryMiB ?? 6144;
@@ -423,42 +422,16 @@ export class InspectorScanner extends Construct {
       },
     });
 
-    // ─── Operational alarms ──────────────────────────────────────────────
-    this.alarms.push(
-      new cloudwatch.Alarm(this, 'DlqDepthAlarm', {
-        alarmDescription:
-          'DLQ has at least one message - a scan was permanently abandoned. ' +
-          'Investigate via CloudWatch Logs Insights filtered by the message body.',
-        metric: this.scanDeadLetterQueue.metricApproximateNumberOfMessagesVisible({
-          period: Duration.minutes(5),
-          statistic: cloudwatch.Stats.MAXIMUM,
-        }),
-        threshold: 0,
-        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-        evaluationPeriods: 1,
-        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-      }),
-    );
-
-    this.alarms.push(
-      new cloudwatch.Alarm(this, 'QueueAgeAlarm', {
-        alarmDescription:
-          'SQS oldest message age > 14h. The scanner Lambda is not keeping ' +
-          'up with the discovery rate. Check scanner errors and concurrency.',
-        metric: this.scanQueue.metricApproximateAgeOfOldestMessage({
-          period: Duration.minutes(5),
-          statistic: cloudwatch.Stats.MAXIMUM,
-        }),
-        threshold: 14 * 60 * 60,
-        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-        evaluationPeriods: 3,
-        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-      }),
-    );
-
-    // Per-provider discovery failure alarms are created in `addDiscoveryProvider`
-    // (one per provider, named per id) ─ a single discovery Lambda failing no
-    // longer hides behind one aggregate alarm.
+    // ─── Observability (SLOs, dashboard, and the alarm registry) ─────────
+    // The facade owns the DLQ-depth + queue-age coarse alarms, the system SLOs,
+    // and the dashboard. Per-provider discovery failure alarms are registered
+    // from `addDiscoveryProvider`.
+    this.observability.monitorScannerCore({
+      scannerFunction: this.scannerFunction,
+      queue: this.scanQueue,
+      dlq: this.scanDeadLetterQueue,
+      scannerTimeout,
+    });
 
     // ─── Outputs ─────────────────────────────────────────────────────────
     new CfnOutput(this, 'FindingsBucketName', {
@@ -639,10 +612,9 @@ export class InspectorScanner extends Construct {
       evaluationPeriods: 1,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
-    // Track for introspection + replay any actions registered before this
-    // provider was added.
-    this.alarms.push(failureAlarm);
-    for (const action of this.alarmActions) failureAlarm.addAlarmAction(action);
+    // Register with the observability facade for introspection + so any alarm
+    // actions added before this provider get replayed onto it.
+    this.observability.registerAlarm(failureAlarm);
 
     const attachment: DiscoveryAttachment = {
       id,
@@ -702,8 +674,7 @@ export class InspectorScanner extends Construct {
    * doesn't matter.
    */
   public addAlarmAction(action: cloudwatch.IAlarmAction): void {
-    this.alarmActions.push(action);
-    for (const alarm of this.alarms) alarm.addAlarmAction(action);
+    this.observability.addAlarmAction(action);
   }
 
   /**
