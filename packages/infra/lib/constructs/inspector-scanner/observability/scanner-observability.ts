@@ -16,14 +16,11 @@ import { BaseSlo } from './slo';
 const PERIOD = Duration.minutes(5);
 
 /**
- * Consumer-facing tuning knobs for the scanner's observability layer. Passed
- * through `InspectorScannerProps.observability` and forwarded to the facade as
- * its defaults. All optional; sensible defaults are applied per field.
+ * Consumer-facing tuning knobs for the scanner's observability, passed through
+ * `InspectorScannerProps.observability`. All optional; sensible defaults apply.
  *
- * NOTE: only `dashboard` is consumed today (scanner-core tier). The remaining
- * knobs are the public surface for the per-provider SLO tier and are wired up
- * in the follow-up observability PR. Registry id is intentionally NOT a metric
- * dimension (it travels in structured logs), so there is no per-registry knob.
+ * Registry id is intentionally NOT a metric dimension (it travels in structured
+ * logs), so there is no per-registry knob.
  */
 export interface ObservabilityOptions {
   /** Whether to build the BYORScan dashboard. @default true */
@@ -57,9 +54,9 @@ export interface ScannerObservabilityProps {
 export interface ScannerCoreProps {
   /** Scanner Lambda — its log group backs the Logs Insights widgets. */
   readonly scannerFunction: lambda.IFunction;
-  /** Scan queue — drives the scan-freshness SLO (and, in PR B, the queue-age alarm). */
+  /** Scan queue — drives the scan-freshness SLO and the queue-age alarm. */
   readonly queue: sqs.IQueue;
-  /** Scan dead-letter queue — backs the DLQ-depth alarm (relocated here in PR B). */
+  /** Scan dead-letter queue — backs the DLQ-depth alarm. */
   readonly dlq: sqs.IQueue;
   /** Scanner Lambda timeout — used for the system SLOs. */
   readonly scannerTimeout: Duration;
@@ -74,31 +71,42 @@ export interface ScannerCoreProps {
 export interface ProviderMonitorProps {
   /** Provider id (becomes part of the alarm's construct id). */
   readonly id: string;
-  /** The provider's `source` (metric dimension); used for per-provider SLOs in the follow-up PR. */
+  /** The provider's `source` metric dimension. */
   readonly source: string;
   /** The provider's dedicated discovery Lambda — its errors back the failure alarm. */
   readonly discoveryFunction: lambda.IFunction;
 }
 
 /**
- * Handle returned by {@link ScannerObservability.monitorProvider}. Carries the
- * per-provider failure alarm; availability/latency SLOs are added to it in the
- * follow-up PR.
+ * Handle returned by {@link ScannerObservability.monitorProvider}, carrying the
+ * provider's failure alarm.
  */
 export interface ProviderMonitor {
   readonly failureAlarm: cloudwatch.Alarm;
 }
 
+/** One metric group rendered as a single widget by {@link ScannerObservability.monitorCustom}. */
+export interface CustomMetricGroup {
+  /** Widget title. */
+  readonly title: string;
+  /** Metrics on the left Y axis. */
+  readonly left?: cloudwatch.IMetric[];
+  /** Metrics on the right Y axis. */
+  readonly right?: cloudwatch.IMetric[];
+}
+
+/** Options for {@link ScannerObservability.monitorCustom}: arbitrary metric groups, one widget each. */
+export interface CustomMonitorOptions {
+  /** Metric groups; each becomes one GraphWidget on the dashboard. */
+  readonly metricGroups: CustomMetricGroup[];
+}
+
 /**
- * Alarm registry — borrowed from cdk-monitoring's "created-alarms + default
- * action" idea. Holds every alarm the facade owns plus the list of registered
- * actions, and keeps them in sync: registering an alarm replays all known
- * actions onto it, and adding an action applies it to all known alarms. Net
- * effect: {@link ScannerObservability.addAlarmAction} routes alarms minted
- * before AND after the call, regardless of order.
- *
- * Mirrors the semantics the {@link InspectorScanner} alarm registry uses today,
- * so the L3's alarms fold into this registry cleanly in a later step.
+ * Alarm registry: holds every alarm the facade owns plus the registered
+ * actions, keeping them in sync — registering an alarm replays all known
+ * actions onto it, and adding an action applies it to all known alarms. So
+ * {@link ScannerObservability.addAlarmAction} routes alarms created before AND
+ * after the call, regardless of order.
  */
 class AlarmRegistry {
   /** Every alarm the facade owns (read-only view via {@link ScannerObservability.createdAlarms}). */
@@ -121,24 +129,24 @@ class AlarmRegistry {
 /**
  * The scanner's observability facade, owned by {@link InspectorScanner} and
  * exposed as `scanner.observability`. One facade per scanner; consumers reach
- * it for `addSegment` / `monitorCustom` / `dashboard` / `slos` / `createdAlarms`
- * while only `addAlarmAction` is forwarded onto the L3 for discoverability.
+ * it for `addSegment` / `monitorCustom` / `dashboard` / `slos` / `createdAlarms`,
+ * while `addAlarmAction` is also forwarded on InspectorScanner for discoverability.
  *
- * Lifecycle tiers:
- *  - **scanner-core** (eager) — {@link monitorScannerCore}, called once from the
- *    L3 constructor: system SLOs (+ per-operation alarms) and the dashboard.
- *  - **per-provider** (eager) — `monitorProvider`, called from
- *    `addDiscoveryProvider`: availability/latency SLOs + failure alarm. *(Added
- *    in the per-provider PR.)*
- *  - **aggregate** (lazy) — the dashboard is assembled from registered segments
- *    at synth. *(Becomes segment-based in the per-provider PR; built eagerly in
- *    {@link monitorScannerCore} for now.)*
+ * What it builds:
+ *  - {@link monitorScannerCore} (called once by InspectorScanner): the system
+ *    SLOs, per-operation + coarse alarms, the Application Signals discovery
+ *    resource, and the scanner-core dashboard widgets.
+ *  - {@link monitorProvider} (called per discovery provider): that provider's
+ *    failure alarm and dashboard widgets.
+ *
+ * The dashboard is created on first use and each provider appends its widgets,
+ * so the final dashboard covers every provider.
  */
 export class ScannerObservability extends Construct {
   /** The BYORScan dashboard. `undefined` when `dashboard: false`. */
   public dashboard?: cloudwatch.Dashboard;
 
-  /** Every SLO this facade minted, keyed by logical name (populated per-provider in the next PR). */
+  /** SLOs minted by the facade, keyed by logical name, for grafting extra alarms. */
   public readonly slos = new Map<string, BaseSlo>();
 
   private readonly opts: ObservabilityOptions;
@@ -151,12 +159,10 @@ export class ScannerObservability extends Construct {
   }
 
   /**
-   * Build the eager scanner-core tier: system SLOs (+ per-operation alarms) and
-   * the dashboard. Call once, from the L3 constructor.
-   *
-   * For now this reuses {@link ScannerSlos} verbatim and builds the dashboard
-   * eagerly; the per-provider PR splits this into a `ScannerCoreSegment` and
-   * relocates the DLQ-depth / queue-age alarms here from the L3.
+   * Build the scanner-core observability: system SLOs and per-operation alarms
+   * (via {@link ScannerSlos}), the DLQ-depth + queue-age coarse alarms, the
+   * Application Signals discovery resource, and the core dashboard widgets.
+   * Call once, from the InspectorScanner constructor.
    */
   public monitorScannerCore(props: ScannerCoreProps): void {
     // Enable Application Signals discovery at the account level so the
@@ -238,17 +244,16 @@ export class ScannerObservability extends Construct {
 
   /**
    * Register an alarm with the facade so {@link addAlarmAction} routes it. Used
-   * to fold in alarms minted outside the facade (the L3's coarse + per-provider
-   * alarms) so a single `addAlarmAction` covers everything.
+   * to fold in alarms minted outside the facade (the scanner's coarse +
+   * per-provider alarms) so a single `addAlarmAction` covers everything.
    */
   public registerAlarm(alarm: cloudwatch.Alarm): void {
     this.alarms.register(alarm);
   }
 
   /**
-   * Build the eager per-provider tier for one discovery provider: its failure
-   * alarm (registered so `addAlarmAction` routes it). The follow-up PR adds
-   * availability/latency SLOs to the returned handle. Called from
+   * Build one discovery provider's observability: its failure alarm (registered
+   * so `addAlarmAction` routes it) and its dashboard widgets. Called from
    * {@link InspectorScanner.addDiscoveryProvider}.
    */
   public monitorProvider(props: ProviderMonitorProps): ProviderMonitor {
@@ -271,8 +276,36 @@ export class ScannerObservability extends Construct {
       },
     );
     this.registerAlarm(failureAlarm);
-    this.renderSegment(new DiscoverySegment(props.source, failureAlarm));
+    this.renderSegment(new DiscoverySegment(props.source));
     return { failureAlarm };
+  }
+
+  /**
+   * Customer extension: add a custom {@link IDashboardSegment}'s widgets to the
+   * BYORScan dashboard. No-op when `dashboard: false`.
+   */
+  public addSegment(segment: IDashboardSegment): void {
+    this.renderSegment(segment);
+  }
+
+  /**
+   * Customer extension: render arbitrary metric groups onto the dashboard — one
+   * GraphWidget per group. No-op when `dashboard: false`.
+   */
+  public monitorCustom(opts: CustomMonitorOptions): void {
+    this.renderSegment({
+      widgets: () =>
+        opts.metricGroups.map(
+          (group) =>
+            new cloudwatch.GraphWidget({
+              title: group.title,
+              left: group.left,
+              right: group.right,
+              width: 12,
+              height: 6,
+            }),
+        ),
+    });
   }
 
   /** Every alarm the facade owns/tracks, for introspection and composition. */

@@ -17,6 +17,8 @@ export {
   ScannerObservabilityProps,
   ScannerCoreProps,
   ObservabilityOptions,
+  CustomMonitorOptions,
+  CustomMetricGroup,
 } from './scanner-observability';
 export {
   IDashboardSegment,
@@ -24,3 +26,4 @@ export {
   DiscoverySegment,
 } from './segment';
 export { METRIC_NAMESPACE, SCANNER_SERVICE, DISCOVERY_SERVICE } from './constants';
+export { ADOT_PYTHON_LAYER_ARNS, adotPythonLayer } from './adot-layer';

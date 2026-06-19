@@ -77,14 +77,13 @@ def _trace_url() -> str:
     )
 
 
-def _record_failure(error_code: str, source: str, registry_id: str) -> None:
-    """Emit ImagesFailed five ways.
+def _record_failure(error_code: str, source: str) -> None:
+    """Emit ImagesFailed four ways.
 
     1. Aggregate (no extra dims) ─ keeps the existing service-level series.
     2. Dimensioned by ``errorCode`` ─ dashboard drill-down.
     3. Dimensioned by ``stage``     ─ per-operation alarms.
     4. Dimensioned by ``source``    ─ per-trigger failure rate on dashboards.
-    5. Dimensioned by ``registry``  ─ per-registry failure rate on dashboards.
 
     The dimensioned copies are emitted via ``single_metric`` so the
     dimensions don't bleed onto the other metrics emitted during this
@@ -113,13 +112,6 @@ def _record_failure(error_code: str, source: str, registry_id: str) -> None:
         value=1,
     ) as metric:
         metric.add_dimension(name="source", value=source)
-    with single_metric(
-        namespace=METRIC_NAMESPACE,
-        name="ImagesFailed",
-        unit=MetricUnit.Count,
-        value=1,
-    ) as metric:
-        metric.add_dimension(name="registry", value=registry_id)
 
 
 def _setup_registry(registry_id: str, done: set[str]) -> None:
@@ -255,7 +247,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG
             span.set_status(StatusCode.ERROR, e.error_code)
             span.record_exception(e)
             span.set_attribute("http.status_code", 500)
-            _record_failure(e.error_code, source, registry_id)
+            _record_failure(e.error_code, source)
             failures.append({"itemIdentifier": message_id})
         except Exception as e:
             logger.exception(
@@ -270,7 +262,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG
             span.set_status(StatusCode.ERROR, "UNKNOWN")
             span.record_exception(e)
             span.set_attribute("http.status_code", 500)
-            _record_failure("UNKNOWN", source, registry_id)
+            _record_failure("UNKNOWN", source)
             failures.append({"itemIdentifier": message_id})
         finally:
             metrics.add_metric(

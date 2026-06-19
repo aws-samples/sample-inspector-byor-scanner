@@ -144,7 +144,9 @@ For a full step-by-step runbook — staging the mTLS secret, a dedicated `bin/pr
 
 ## Observability
 
-Both Lambdas are instrumented with [AWS Distro for OpenTelemetry](https://aws-otel.github.io/) via the ADOT Lambda layer — `tracing: lambda.Tracing.ACTIVE` plus the layer's auto-instrumentation produces full Application Signals + service map output, and the scan pipeline adds manual spans per stage (`ScanImage` → `InspectImage`, `PullImage`, `GenerateSBOM`, `ScanVulnerabilities`, `DeliverFindings`, …).
+Observability is owned by the `InspectorScanner` construct and exposed as `scanner.observability` (the `ScannerObservability` facade): it builds the SLOs, alarms, and dashboard, and tracks every alarm in one registry. Both Lambdas are instrumented with [AWS Distro for OpenTelemetry](https://aws-otel.github.io/) via the ADOT Lambda layer — `tracing: lambda.Tracing.ACTIVE` plus the layer's auto-instrumentation produces full Application Signals + service map output, and the scan pipeline adds manual spans per stage (`ScanImage` → `InspectImage`, `PullImage`, `GenerateSBOM`, `ScanVulnerabilities`, `DeliverFindings`, …).
+
+The ADOT layer ARN is region-pinned; deploying to a region without a configured ARN fails fast with a clear error (see `observability/adot-layer.ts`).
 
 ### Metrics
 
@@ -152,24 +154,28 @@ EMF metrics (Powertools) under namespace `BYORScan`, carrying a `service` dimens
 
 | Metric | Notes |
 |--------|-------|
-| `ImagesScanned` / `ImagesFailed` / `ImagesSkipped` | scan outcomes; `ImagesFailed` is also emitted with an `errorCode` dimension for the per-operation alarms |
+| `ImagesScanned` / `ImagesFailed` / `ImagesSkipped` | scan outcomes. `ImagesFailed` is emitted as a `{service}` aggregate plus copies dimensioned by `stage`, `errorCode`, and `source` |
 | `ScanDuration` | per-image wall-clock in ms (p50/p99) |
 | `SBOMCacheHit` / `SBOMCacheMiss` | SBOM cache effectiveness |
 | `VulnerabilitiesFound` | findings per scan |
-| `ImagesEnqueued` | discovery fan-out (also dimensioned by `mode`) |
-| `DiscoveryFailed` | discovery-stage failures |
+| `ImagesEnqueued` | discovery fan-out, dimensioned by `source` |
+| `DiscoveryFailed` | discovery-stage failures (`{service}`) |
+
+`scanner.metricScanFailures()` returns the `ImagesFailed{service}` metric so dashboards, alarms, and custom widgets all read the same series. Registry id is intentionally a structured-log field, not a metric dimension, to bound cardinality.
 
 ### Alarms
 
-**Operational** (always on, the primary paging signals):
+All alarms are owned by the facade and tracked in one registry. The facade creates **no SNS topic** — route every alarm (coarse, per-stage, per-provider, and burn-rate) to a destination with `scanner.addAlarmAction(action)` (any `IAlarmAction`, e.g. an SNS action). The call applies to alarms created before and after it, so order doesn't matter; an unrouted alarm still fires and renders.
+
+**Coarse** (the primary paging signals):
 
 - DLQ depth > 0
 - SQS oldest message age > 14h
-- Discovery Lambda errors > 0
+- Per discovery provider: that provider's discovery Lambda errors > 0 (one alarm per `addDiscoveryProvider`)
 
-**Per-operation** — fire when an `errorCode` appears on `ImagesFailed` at least twice in 3 of 5 five-minute periods: `AUTH_FAILED`, `INSPECT_FAILED`, `PULL_FAILED`, `PULL_TIMEOUT`, `SBOMGEN_FAILED`, `SCANSBOM_FAILED`, `SCANSBOM_THROTTLED`, `SCANSBOM_VALIDATION`, `S3_WRITE_FAILED`.
+**Per-stage** — one per scan pipeline stage (`Inspect`, `Pull`, `SbomGen`, `ScanSbom`, `Delivery`), firing when `ImagesFailed` with that `stage` appears at least twice in 3 of 5 five-minute periods.
 
-**Burn-rate** — one per SLO that isn't already covered by an operational alarm (scanner availability + latency, discovery latency, new-image-coverage, image-compatibility).
+**Burn-rate** — one per system SLO not already covered by a coarse alarm (`byor-new-image-coverage`, `byor-image-compatibility`).
 
 ### Service Level Objectives
 
@@ -185,10 +191,12 @@ Scanner and Discovery availability/latency SLOs are managed directly by Applicat
 
 ### Dashboard
 
-A `BYORScan` CloudWatch dashboard:
+A region-qualified `BYORScan-<region>` CloudWatch dashboard (the name is region-scoped because CloudWatch dashboard names are account-global). It is built from segments, so it grows with the discovery providers you attach. Disable it with `observability: { dashboard: false }`.
 
-- **Logs Insights:** top 10 images by critical findings; all images with latest findings; repeatedly-failed images. Findings rows expose a clickable `FindingsURL` (S3 console) link, and the repeatedly-failed table includes a clickable `Trace` column that deep-links to the failure's X-Ray trace.
-- **Metrics:** scan volume, scan success rate, discovery volume, and scan duration (p50/p99).
+- **Scanner core:** Logs Insights tables (top 10 images by critical findings; all images with latest findings; repeatedly-failed images — with a clickable `FindingsURL` S3 link and a `Trace` column that deep-links to the failure's X-Ray trace) plus graphs for scan volume, scan success rate, discovery volume (all sources), and scan duration (p50/p99).
+- **Per discovery provider:** one row per provider — a discovery-volume graph (`ImagesEnqueued` for that `source`) and a failure-alarm status tile.
+
+Extend the dashboard from your own stack with `scanner.observability.addSegment(...)` or `scanner.observability.monitorCustom(...)`. `scanner.observability` also exposes `dashboard`, `slos`, and `createdAlarms` for introspection.
 
 ## Security
 
