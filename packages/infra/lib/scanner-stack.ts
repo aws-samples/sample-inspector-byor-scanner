@@ -18,7 +18,7 @@ import {
   ScheduledStaticDiscoveryProvider,
   ScheduledTrigger,
 } from '@constructs/inspector-scanner';
-import { Observability } from './constructs/observability';
+import { Observability } from './constructs/inspector-scanner/observability';
 
 export interface ScannerStackProps extends StackProps {
   /** VPC the Lambdas attach to. Must have private subnets and egress for AWS APIs. */
