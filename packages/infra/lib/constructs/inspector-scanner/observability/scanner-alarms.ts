@@ -1,4 +1,4 @@
-import { Duration } from 'aws-cdk-lib';
+import { Duration, Stack } from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import { Construct } from 'constructs';
 import { METRIC_NAMESPACE } from './constants';
@@ -33,10 +33,11 @@ export class ScannerAlarms extends Construct {
   constructor(scope: Construct, id: string) {
     super(scope, id);
 
+    const region = Stack.of(this).region;
     for (const [name, stage] of STAGE_ALARMS) {
       this.alarms.push(
         new MetricAlarm(this, name, {
-          alarmName: `byor-scanner-${stage}`,
+          alarmName: `byor-scanner-${stage}-${region}`,
           alarmDescription: `${stage} stage failures detected on the scanner`,
           metric: new cloudwatch.Metric({
             namespace: METRIC_NAMESPACE,

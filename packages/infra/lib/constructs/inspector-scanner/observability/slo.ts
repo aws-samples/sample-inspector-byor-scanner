@@ -1,4 +1,4 @@
-import { Duration } from 'aws-cdk-lib';
+import { Duration, Stack } from 'aws-cdk-lib';
 import * as applicationsignals from 'aws-cdk-lib/aws-applicationsignals';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import { Construct } from 'constructs';
@@ -247,7 +247,7 @@ function createBurnRateAlarm(
   }
 
   const alarm = new cloudwatch.Alarm(scope, 'BurnRate', {
-    alarmName: `${props.sloName}-BurnRate`,
+    alarmName: `${props.sloName}-BurnRate-${Stack.of(scope).region}`,
     metric: new cloudwatch.Metric({
       namespace: 'AWS/ApplicationSignals',
       metricName: 'BurnRate',

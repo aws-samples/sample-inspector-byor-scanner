@@ -1,10 +1,10 @@
-import { Duration, Stack } from 'aws-cdk-lib';
+import { Aspects, Duration, Stack } from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as cr from 'aws-cdk-lib/custom-resources';
-import { Construct } from 'constructs';
+import { Construct, IConstruct } from 'constructs';
 import { ScannerSlos } from './scanner-slos';
 import {
   DiscoverySegment,
@@ -139,11 +139,13 @@ class AlarmRegistry {
  *  - {@link monitorProvider} (called per discovery provider): that provider's
  *    failure alarm and dashboard widgets.
  *
- * The dashboard is created on first use and each provider appends its widgets,
- * so the final dashboard covers every provider.
+ * The dashboard is created up front; its widgets are filled in at synth. Each
+ * `monitor*` / `addSegment` / `monitorCustom` call just records a segment, and
+ * one Aspect adds all their widgets at the end — so every provider shows up no
+ * matter what order things were added.
  */
 export class ScannerObservability extends Construct {
-  /** The BYORScan dashboard. `undefined` when `dashboard: false`. */
+  /** The BYORScan dashboard (widgets added at synth). `undefined` when `dashboard: false`. */
   public dashboard?: cloudwatch.Dashboard;
 
   /** SLOs minted by the facade, keyed by logical name, for grafting extra alarms. */
@@ -151,11 +153,36 @@ export class ScannerObservability extends Construct {
 
   private readonly opts: ObservabilityOptions;
   private readonly alarms = new AlarmRegistry();
+  /** Dashboard segments collected during setup; their widgets are added at synth. */
+  private readonly segments: IDashboardSegment[] = [];
 
   constructor(scope: Construct, id: string, props: ScannerObservabilityProps = {}) {
     super(scope, id);
     this.opts = props.defaults ?? {};
     if (props.alarmAction) this.addAlarmAction(props.alarmAction);
+
+    // Create the dashboard now so `this.dashboard` is usable right away, but
+    // add its widgets later: each setup call records a segment, and the Aspect
+    // below adds them all at synth, once every segment is registered. (CDK v2
+    // has no onPrepare hook, so we use an Aspect; it only edits the existing
+    // dashboard, never creates one.)
+    if (this.opts.dashboard !== false) {
+      this.dashboard = new cloudwatch.Dashboard(this, 'Dashboard', {
+        dashboardName: `BYORScan-${Stack.of(this).region}`,
+      });
+    }
+
+    const self = this;
+    let flushed = false;
+    Aspects.of(this).add({
+      visit(node: IConstruct): void {
+        if (flushed || node !== self || !self.dashboard) return;
+        for (const segment of self.segments) {
+          for (const widget of segment.widgets()) self.dashboard.addWidgets(widget);
+        }
+        flushed = true;
+      },
+    });
   }
 
   /**
@@ -199,6 +226,7 @@ export class ScannerObservability extends Construct {
     // failure alarms are registered from InspectorScanner.addDiscoveryProvider).
     this.registerAlarm(
       new cloudwatch.Alarm(this, 'DlqDepthAlarm', {
+        alarmName: `byor-scanner-dlq-depth-${Stack.of(this).region}`,
         alarmDescription:
           'DLQ has at least one message - a scan was permanently abandoned. ' +
           'Investigate via CloudWatch Logs Insights filtered by the message body.',
@@ -215,6 +243,7 @@ export class ScannerObservability extends Construct {
 
     this.registerAlarm(
       new cloudwatch.Alarm(this, 'QueueAgeAlarm', {
+        alarmName: `byor-scanner-queue-age-${Stack.of(this).region}`,
         alarmDescription:
           'SQS oldest message age > 14h. The scanner Lambda is not keeping ' +
           'up with the discovery rate. Check scanner errors and concurrency.',
@@ -229,7 +258,7 @@ export class ScannerObservability extends Construct {
       }),
     );
 
-    this.renderSegment(new ScannerCoreSegment(props.scannerFunction));
+    this.segments.push(new ScannerCoreSegment(props.scannerFunction));
   }
 
   /**
@@ -261,6 +290,7 @@ export class ScannerObservability extends Construct {
       this,
       `Discovery${props.id}FailureAlarm`,
       {
+        alarmName: `byor-discovery-${props.id}-failure-${Stack.of(this).region}`,
         alarmDescription:
           `Discovery provider '${props.id}' failed - no images were enqueued ` +
           'for at least one cycle. The scanner is silently not running for ' +
@@ -276,7 +306,7 @@ export class ScannerObservability extends Construct {
       },
     );
     this.registerAlarm(failureAlarm);
-    this.renderSegment(new DiscoverySegment(props.source));
+    this.segments.push(new DiscoverySegment(props.source));
     return { failureAlarm };
   }
 
@@ -285,7 +315,7 @@ export class ScannerObservability extends Construct {
    * BYORScan dashboard. No-op when `dashboard: false`.
    */
   public addSegment(segment: IDashboardSegment): void {
-    this.renderSegment(segment);
+    this.segments.push(segment);
   }
 
   /**
@@ -293,7 +323,7 @@ export class ScannerObservability extends Construct {
    * GraphWidget per group. No-op when `dashboard: false`.
    */
   public monitorCustom(opts: CustomMonitorOptions): void {
-    this.renderSegment({
+    this.segments.push({
       widgets: () =>
         opts.metricGroups.map(
           (group) =>
@@ -311,33 +341,5 @@ export class ScannerObservability extends Construct {
   /** Every alarm the facade owns/tracks, for introspection and composition. */
   public get createdAlarms(): readonly cloudwatch.Alarm[] {
     return this.alarms.all;
-  }
-
-  // ─── internals ───────────────────────────────────────────────────────
-
-  /**
-   * Lazily create the BYORScan dashboard. The name stays region-qualified
-   * because CloudWatch dashboard names are account-global. Returns undefined
-   * when `dashboard: false`.
-   */
-  private ensureDashboard(): cloudwatch.Dashboard | undefined {
-    if (this.opts.dashboard === false) return undefined;
-    if (!this.dashboard) {
-      this.dashboard = new cloudwatch.Dashboard(this, 'Dashboard', {
-        dashboardName: `BYORScan-${Stack.of(this).region}`,
-      });
-    }
-    return this.dashboard;
-  }
-
-  /**
-   * Render a segment onto the dashboard — one dashboard row per widget the
-   * segment returns. Core renders eagerly from `monitorScannerCore`; each
-   * provider appends its row from `monitorProvider`.
-   */
-  private renderSegment(segment: IDashboardSegment): void {
-    const dashboard = this.ensureDashboard();
-    if (!dashboard) return;
-    for (const widget of segment.widgets()) dashboard.addWidgets(widget);
   }
 }
