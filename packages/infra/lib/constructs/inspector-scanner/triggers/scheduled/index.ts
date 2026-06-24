@@ -137,4 +137,12 @@ export class ScheduledTrigger extends Construct implements ITrigger {
     // this trigger's own scheduler role ─ nothing extra to grant against the
     // discovery Lambda role here.
   }
+
+  /**
+   * Each schedule stamps its `id` as the event `source` (see `bind`), so the
+   * dashboard graphs those ids, not the provider id.
+   */
+  public metricSources(): string[] {
+    return this.schedules.map((entry) => entry.id);
+  }
 }

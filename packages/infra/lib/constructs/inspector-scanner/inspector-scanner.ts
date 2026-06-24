@@ -638,6 +638,14 @@ export class InspectorScanner extends Construct {
     trigger.bind(this, discoveryFn);
     trigger.grantInvoke(discoveryFn.role!);
 
+    // A trigger that stamps its own `source` tells the dashboard which sources
+    // to graph. Without this, the widget queries the provider id, which that
+    // trigger never emits, and stays empty.
+    const metricSources = trigger.metricSources?.();
+    if (metricSources?.length) {
+      this.observability.setDiscoverySources(trigger.discovery.id, metricSources);
+    }
+
     this.triggerIds.add(id);
     return { id, discovery: trigger.discovery };
   }

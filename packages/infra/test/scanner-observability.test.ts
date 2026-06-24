@@ -56,7 +56,7 @@ describe('ScannerObservability (scanner-core tier, via InspectorScanner)', () =>
     // The provider-independent alarms, spelled out so adding/removing one is a
     // deliberate test change rather than a mystery off-by-one.
     const COARSE = 2; // DLQ-depth + queue-age
-    const PER_STAGE = 5; // Inspect, Pull, SbomGen, ScanSbom, Delivery
+    const PER_STAGE = 6; // Resolve, Inspect, Pull, SbomGen, ScanSbom, Delivery
     const SLO_BURN_RATE = 2; // new-image-coverage + image-compatibility
     expect(scanner.observability.createdAlarms).toHaveLength(
       COARSE + PER_STAGE + SLO_BURN_RATE,
