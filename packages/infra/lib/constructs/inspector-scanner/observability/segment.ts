@@ -132,7 +132,7 @@ export class ScannerCoreSegment implements IDashboardSegment {
       ),
       new cloudwatch.Row(
         new cloudwatch.GraphWidget({
-          title: 'Discovery Volume',
+          title: 'Discovery Volume - Total',
           left: [
             new cloudwatch.MathExpression({
               expression:
@@ -175,8 +175,9 @@ export class ScannerCoreSegment implements IDashboardSegment {
 }
 
 /**
- * Per-provider dashboard widget, keyed by `source`: that provider's enqueue
- * volume. One per discovery provider.
+ * One "Discovery Volume" graph per provider, with a line per `source` the
+ * provider emits. A trigger that stamps its own per-event sources yields one
+ * line each, so widget count tracks providers, not the sources within them.
  *
  * No SLOs: scanner/discovery availability and latency are managed by
  * Application Signals SLO-by-service rather than defined in CDK, so this
@@ -184,25 +185,32 @@ export class ScannerCoreSegment implements IDashboardSegment {
  * exists (created by the facade) and is routed via addAlarmAction.
  */
 export class DiscoverySegment implements IDashboardSegment {
+  private readonly sources: string[];
+
   constructor(
-    /** The provider's `source` dimension value. */
-    public readonly source: string,
-  ) {}
+    /** Provider id — the widget title and grouping key. */
+    public readonly providerId: string,
+    /** The `source` dimension value(s) this provider emits — one line each. */
+    sources: string[],
+  ) {
+    this.sources = sources;
+  }
 
   public widgets(): cloudwatch.IWidget[] {
     return [
       new cloudwatch.GraphWidget({
-        title: `Discovery Volume — ${this.source}`,
-        left: [
-          new cloudwatch.Metric({
-            namespace: METRIC_NAMESPACE,
-            metricName: 'ImagesEnqueued',
-            dimensionsMap: { service: DISCOVERY_SERVICE, source: this.source },
-            statistic: cloudwatch.Stats.SUM,
-            period: PERIOD,
-            label: 'Enqueued',
-          }),
-        ],
+        title: `Discovery Volume — ${this.providerId}`,
+        left: this.sources.map(
+          (source) =>
+            new cloudwatch.Metric({
+              namespace: METRIC_NAMESPACE,
+              metricName: 'ImagesEnqueued',
+              dimensionsMap: { service: DISCOVERY_SERVICE, source },
+              statistic: cloudwatch.Stats.SUM,
+              period: PERIOD,
+              label: source,
+            }),
+        ),
         width: 12,
         height: 6,
       }),

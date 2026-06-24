@@ -9,6 +9,7 @@ import { MetricAlarm } from './metric-alarm';
  * error codes emitted by the scanner Lambda on the `stage` dimension.
  */
 const STAGE_ALARMS: ReadonlyArray<readonly [string, string]> = [
+  ['Resolve', 'Resolve'],
   ['Inspect', 'Inspect'],
   ['Pull', 'Pull'],
   ['SbomGen', 'SbomGen'],

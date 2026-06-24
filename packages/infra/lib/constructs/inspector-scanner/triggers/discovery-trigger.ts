@@ -106,4 +106,12 @@ export interface ITrigger {
    * exists for custom triggers that need to grant against the role.
    */
   grantInvoke(role: iam.IRole): void;
+
+  /**
+   * The `source` values this trigger stamps on its events, when it overrides
+   * the provider default. Omit if the trigger doesn't set `source` (the Lambda
+   * then falls back to the provider id); implement it so the dashboard graphs
+   * the sources actually emitted.
+   */
+  metricSources?(): string[];
 }

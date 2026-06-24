@@ -156,6 +156,14 @@ export class ScannerObservability extends Construct {
   /** Dashboard segments collected during setup; their widgets are added at synth. */
   private readonly segments: IDashboardSegment[] = [];
 
+  /**
+   * Per-provider `source` values for the "Discovery Volume" widgets, keyed by
+   * provider id. Seeded empty by {@link monitorProvider}; triggers add their
+   * sources via {@link setDiscoverySources}. Read at synth ─ an empty set falls
+   * back to the provider id so every provider still renders a line.
+   */
+  private readonly discoveryWidgetSources = new Map<string, Set<string>>();
+
   constructor(scope: Construct, id: string, props: ScannerObservabilityProps = {}) {
     super(scope, id);
     this.opts = props.defaults ?? {};
@@ -260,6 +268,19 @@ export class ScannerObservability extends Construct {
     );
 
     this.segments.push(new ScannerCoreSegment(props.scannerFunction));
+
+    // One "Discovery Volume" widget per provider, rendered after the core
+    // widgets. Sources are read at synth (in the Aspect flush), by which point
+    // every trigger has added its sources; an empty set falls back to the id.
+    this.segments.push({
+      widgets: () =>
+        [...this.discoveryWidgetSources.entries()].flatMap(
+          ([providerId, sources]) => {
+            const resolved = sources.size > 0 ? [...sources] : [providerId];
+            return new DiscoverySegment(providerId, resolved).widgets();
+          },
+        ),
+    });
   }
 
   /**
@@ -307,8 +328,22 @@ export class ScannerObservability extends Construct {
       },
     );
     this.registerAlarm(failureAlarm);
-    this.segments.push(new DiscoverySegment(props.source));
+    // Register the provider with an empty source set. Triggers add real sources
+    // via setDiscoverySources; the renderer falls back to the provider id when
+    // none did. Rendering is deferred to synth, so attach order doesn't matter.
+    this.discoveryWidgetSources.set(props.id, new Set());
     return { failureAlarm };
+  }
+
+  /**
+   * Add the `source` values a trigger stamps for a provider's "Discovery
+   * Volume" widget. Merges, so multiple triggers on one provider accumulate.
+   * Called from {@link InspectorScanner.addTrigger}.
+   */
+  public setDiscoverySources(providerId: string, sources: string[]): void {
+    const set = this.discoveryWidgetSources.get(providerId) ?? new Set<string>();
+    for (const source of sources) set.add(source);
+    this.discoveryWidgetSources.set(providerId, set);
   }
 
   /**
