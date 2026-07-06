@@ -19,7 +19,7 @@
     "@types/node": "^26.1.0",
     "eslint": "^10.6.0",
     "nx": "23.0.1",
-    "prettier": "^3.8.4",
+    "prettier": "^3.9.4",
     "typescript": "~6.0.3"
   },
   "overrides": {
