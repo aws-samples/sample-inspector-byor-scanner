@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import stat
 from pathlib import Path
 from typing import Any
@@ -96,6 +97,13 @@ class MtlsAuth:
                 "MtlsAuth.get_skopeo_args() called before setup().",
             )
         return [f"--cert-dir={self._cert_dir}", "--tls-verify=true"]
+
+    def teardown(self) -> None:
+        """Shred the cert dir (see SupportsTeardown). Idempotent."""
+        if self._cert_dir is None:
+            return
+        shutil.rmtree(self._cert_dir, ignore_errors=True)
+        self._cert_dir = None
 
     def _fetch(self, secret_name: str) -> dict[str, Any]:
         try:

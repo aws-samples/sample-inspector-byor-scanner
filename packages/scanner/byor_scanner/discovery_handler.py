@@ -72,6 +72,7 @@ from byor_scanner.errors import (
 )
 from byor_scanner.plugin_loader import load_plugin
 from byor_scanner.protocols import DiscoveryBackend
+from byor_scanner.validation import validate_source_type
 
 logger = Logger(service=SERVICE_DISCOVERY)
 metrics = Metrics(namespace=METRIC_NAMESPACE, service=SERVICE_DISCOVERY)
@@ -213,6 +214,16 @@ def _validate_images(images: list[dict[str, str]]) -> None:
                 f"Discovery result at index {idx} has invalid "
                 f"'registry' (must be a non-empty string): {img!r}",
             )
+        # sourceType is optional; allowlist it (findings S3 key segment).
+        source_type = img.get("sourceType")
+        if source_type is not None:
+            if not isinstance(source_type, str):
+                raise ScanError(
+                    INVALID_INPUT,
+                    f"Discovery result at index {idx} has non-string "
+                    f"'sourceType': {img!r}",
+                )
+            validate_source_type(source_type)
 
 
 def _message_body(
