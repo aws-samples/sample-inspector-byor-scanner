@@ -218,17 +218,3 @@ class AuthProvider(Protocol):
             --authfile=<path>     → passed through unchanged (global flag)
         """
         ...
-
-
-@runtime_checkable
-class SupportsTeardown(Protocol):
-    """Optional :class:`AuthProvider` extension to clean up on-disk secret
-    material at end of batch, so a key can't linger on ``/tmp`` across warm
-    invocations. ``setup()`` re-fetches per batch, so teardown removes no
-    within-batch cache. Separate from :class:`AuthProvider` (like
-    :class:`SupportsSkopeoEnv`) to avoid rejecting backends that don't need it.
-    """
-
-    def teardown(self) -> None:
-        """Remove any on-disk secret material written by :meth:`setup`."""
-        ...

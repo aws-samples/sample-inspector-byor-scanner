@@ -30,7 +30,7 @@ from byor_scanner.constants import (
 )
 from byor_scanner.errors import UNKNOWN_REGISTRY, ScanError, classify_stage
 from byor_scanner.plugin_loader import load_plugin_from_path
-from byor_scanner.protocols import AuthProvider, SupportsTeardown
+from byor_scanner.protocols import AuthProvider
 from byor_scanner.scan import ScanRequest, ensure_policy_json, scan_image
 
 # Tracing is handled by the AWS Distro for OpenTelemetry (ADOT) Lambda layer
@@ -141,18 +141,13 @@ def _setup_registry(registry_id: str, done: set[str]) -> None:
     done.add(registry_id)
 
 
-def _teardown_registries(done: set[str]) -> None:
-    """End-of-batch shred: teardown() each provider that opts into
-    SupportsTeardown. Best-effort ─ never fails the batch."""
-    for registry_id in done:
-        auth = auth_by_registry[registry_id]
-        if isinstance(auth, SupportsTeardown):
-            try:
-                auth.teardown()
-            except Exception:  # noqa: BLE001 ─ cleanup must not fail the batch
-                logger.warning(
-                    "Auth teardown failed", extra={"registry": registry_id}
-                )
+def _shred_cert_dirs(cert_dirs: set[str]) -> None:
+    """Remove the --cert-dir(s) plugins declared, so secret material doesn't
+    linger on /tmp across warm invocations. Best-effort ─ never fails."""
+    import shutil
+
+    for cert_dir in cert_dirs:
+        shutil.rmtree(cert_dir, ignore_errors=True)
 
 
 def _apply_tls_policy(auth_args: list[str], insecure: bool) -> list[str]:
@@ -199,6 +194,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG
     # a registry's auth.setup() runs only the first time a message in this
     # batch references it.
     setup_done: set[str] = set()
+    # Cert dirs any auth plugin pointed skopeo at this batch, shredded at the end.
+    cert_dirs: set[str] = set()
     failures: list[dict[str, str]] = []
 
     for record in event.get("Records", []):
@@ -234,14 +231,21 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG
             _setup_registry(registry_id, setup_done)
             auth = auth_by_registry[registry_id]
 
+            auth_args = _apply_tls_policy(
+                auth.get_skopeo_args(), entry.insecure_tls_verify
+            )
+            cert_dirs.update(
+                a[len("--cert-dir=") :]
+                for a in auth_args
+                if a.startswith("--cert-dir=")
+            )
+
             scan_image(
                 ScanRequest(
                     image=image,
                     ref=ref,
                     registry=entry.url,
-                    auth_args=_apply_tls_policy(
-                        auth.get_skopeo_args(), entry.insecure_tls_verify
-                    ),
+                    auth_args=auth_args,
                     bucket=FINDINGS_BUCKET,
                     source=source,
                     registry_id=registry_id,
@@ -287,7 +291,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG
             )
             logger.remove_keys(["image", "ref", "source", "registry", "attempt"])
 
-    # End of batch: shred providers' on-disk secret material (loop catches all).
-    _teardown_registries(setup_done)
+    # End of batch: shred cert dirs plugins declared (loop catches all).
+    _shred_cert_dirs(cert_dirs)
 
     return {"batchItemFailures": failures}

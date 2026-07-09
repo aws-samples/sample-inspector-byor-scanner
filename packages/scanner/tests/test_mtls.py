@@ -174,22 +174,3 @@ def test_two_registries_get_isolated_cert_dirs(
     assert auth_a._cert_dir != auth_b._cert_dir  # type: ignore[attr-defined]
     assert auth_a._cert_dir is not None  # type: ignore[attr-defined]
     assert f"--cert-dir={auth_a._cert_dir}" in args_a  # type: ignore[attr-defined]
-
-
-def test_teardown_shreds_cert_dir(
-    monkeypatch: pytest.MonkeyPatch,
-    cert_dir: Path,
-    fake_secret: dict[str, str],
-) -> None:
-    # teardown() must remove the /tmp cert dir so the key can't linger.
-    monkeypatch.setenv(ENV_MTLS_SECRET_NAME, "scanner/mtls")
-    auth = _build_auth(monkeypatch, secret_value=json.dumps(fake_secret))
-    auth.setup()
-    written = auth._cert_dir  # type: ignore[attr-defined]
-    assert written.exists()
-
-    auth.teardown()
-    assert not written.exists()
-    assert auth._cert_dir is None  # type: ignore[attr-defined]
-
-    auth.teardown()  # idempotent: safe when nothing was set up
