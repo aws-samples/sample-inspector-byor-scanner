@@ -30,6 +30,10 @@ ENV_REGISTRY_URL = "BYOR_REGISTRY_URL"
 # ENV_REGISTRY_URL / ENV_AUTH_PROVIDER / ENV_MTLS_SECRET_NAME.
 ENV_REGISTRIES = "BYOR_REGISTRIES"
 ENV_FINDINGS_BUCKET = "BYOR_FINDINGS_BUCKET"
+# Allowlist (comma-separated) of `sourceType` values; each becomes a findings
+# S3 key segment. Defaults to "canary" (canary-run isolation).
+ENV_ALLOWED_SOURCE_TYPES = "BYOR_ALLOWED_SOURCE_TYPES"
+DEFAULT_ALLOWED_SOURCE_TYPES = ("canary",)
 ENV_QUEUE_URL = "BYOR_QUEUE_URL"
 # Trigger logical id, set by the trigger construct on the discovery Lambda.
 # Used as the default `source` value when an event does not carry one.

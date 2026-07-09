@@ -62,6 +62,7 @@ const ENV_FINDINGS_BUCKET = 'BYOR_FINDINGS_BUCKET';
 const ENV_QUEUE_URL = 'BYOR_QUEUE_URL';
 const ENV_DISCOVERY_BACKEND = 'BYOR_DISCOVERY_BACKEND';
 const ENV_TRIGGER_SOURCE = 'BYOR_TRIGGER_SOURCE';
+const ENV_ALLOWED_SOURCE_TYPES = 'BYOR_ALLOWED_SOURCE_TYPES';
 
 /**
  * Configuration for a single container registry attached via
@@ -139,6 +140,12 @@ export interface InspectorScannerProps {
   readonly sqsBatchSize?: number;
   /** SQS event source mapping max concurrency. Defaults to 10. */
   readonly sqsMaxConcurrency?: number;
+
+  /**
+   * Allowlist of accepted `sourceType` values (each becomes a findings S3 key
+   * segment). Defaults to `['canary']` in the Lambda. Set to add partitions.
+   */
+  readonly allowedSourceTypes?: string[];
 
   /** Observability tuning knobs (dashboard toggle, SLO goals, etc.). */
   readonly observability?: ObservabilityOptions;
@@ -299,13 +306,17 @@ export class InspectorScanner extends Construct {
     const scannerLayers = [...baseLayers];
 
     // ─── Common Lambda env (shared between scanner + discovery) ──────────
-    const commonEnv = {
+    const commonEnv: Record<string, string> = {
       // ADOT ─ Application Signals
       AWS_LAMBDA_EXEC_WRAPPER: '/opt/otel-instrument',
       OTEL_AWS_APPLICATION_SIGNALS_ENABLED: 'true',
       // Powertools is used for Logger + Metrics; tracing is OTel-only.
       POWERTOOLS_TRACE_DISABLED: 'true',
     };
+    // Only set when overriding the Lambda default (['canary']).
+    if (props.allowedSourceTypes?.length) {
+      commonEnv[ENV_ALLOWED_SOURCE_TYPES] = props.allowedSourceTypes.join(',');
+    }
 
     // Capture what `addDiscoveryProvider` needs to build per-provider discovery
     // Lambdas (VPC, ADOT layer, common env).

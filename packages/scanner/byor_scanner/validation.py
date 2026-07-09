@@ -12,8 +12,13 @@ References:
 
 from __future__ import annotations
 
+import os
 import re
 
+from byor_scanner.constants import (
+    DEFAULT_ALLOWED_SOURCE_TYPES,
+    ENV_ALLOWED_SOURCE_TYPES,
+)
 from byor_scanner.errors import INVALID_INPUT, ScanError
 
 # Repository name component grammar from the Distribution reference grammar.
@@ -34,6 +39,10 @@ _DIGEST_RE = re.compile(r"^sha(?:256:[A-Fa-f0-9]{64}|512:[A-Fa-f0-9]{128})$")
 # defense-in-depth limit on the subprocess command-line size.
 _MAX_REPOSITORY_LEN = 255
 _MAX_REF_LEN = 255
+
+# sourceType is a manifest field that becomes a findings S3 key segment; keep
+# it a flat token so it can't reshape the key path.
+_SOURCE_TYPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 def validate_image_name(image: str) -> None:
@@ -78,4 +87,31 @@ def validate_ref(ref: str) -> None:
     if not _TAG_RE.match(ref):
         raise ScanError(
             INVALID_INPUT, f"Ref {ref!r} does not match the OCI tag grammar"
+        )
+
+
+def _allowed_source_types() -> frozenset[str]:
+    """Allowlist from ``BYOR_ALLOWED_SOURCE_TYPES``, else the default."""
+    raw = os.environ.get(ENV_ALLOWED_SOURCE_TYPES, "")
+    values = [v.strip() for v in raw.split(",") if v.strip()] or list(
+        DEFAULT_ALLOWED_SOURCE_TYPES
+    )
+    return frozenset(values)
+
+
+def validate_source_type(source_type: str) -> None:
+    """Raise ``ScanError(INVALID_INPUT)`` unless ``source_type`` is on the
+    allowlist and a flat token (it becomes a findings S3 key segment)."""
+    allowed = _allowed_source_types()
+    if source_type not in allowed:
+        raise ScanError(
+            INVALID_INPUT,
+            f"sourceType {source_type!r} is not allowed; "
+            f"permitted values: {sorted(allowed)}",
+        )
+    if not _SOURCE_TYPE_RE.match(source_type):
+        raise ScanError(
+            INVALID_INPUT,
+            f"sourceType {source_type!r} must be a flat token "
+            "([A-Za-z0-9][A-Za-z0-9._-]{0,63}); no '/' or '..'",
         )
