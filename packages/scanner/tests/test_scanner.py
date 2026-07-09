@@ -208,6 +208,40 @@ def test_unknown_registry_reports_failure(scanner: Any) -> None:
     assert SETUP_CALLS == {}
 
 
+# cert dir a fake auth points skopeo at; the handler must shred it end of batch.
+_CERT_DIR: dict[str, str] = {}
+
+
+class CertDirAuth(_RecordingAuth):
+    MARKER = "certdir"
+
+    def get_skopeo_args(self) -> list[str]:
+        return [f"--cert-dir={_CERT_DIR['path']}", "--tls-verify=true"]
+
+
+def test_handler_shreds_declared_cert_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    cert_dir = tmp_path / "certs"
+    cert_dir.mkdir()
+    (cert_dir / "client.key").write_text("secret")
+    _CERT_DIR["path"] = str(cert_dir)
+
+    scanner = _reload_scanner(
+        monkeypatch,
+        {
+            "default": {
+                "url": "r.example.com",
+                "authProvider": f"{__name__}.CertDirAuth",
+                "authEnv": {},
+            }
+        },
+    )
+    scanner.handler(_sqs_event({"image": "a/b", "ref": "v1"}), _ctx())
+
+    assert not cert_dir.exists()  # shredded after the batch
+
+
 def test_auth_env_applied_before_setup(scanner: Any) -> None:
     import os
 
