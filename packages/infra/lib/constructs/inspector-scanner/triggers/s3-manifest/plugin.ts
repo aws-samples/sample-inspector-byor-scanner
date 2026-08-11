@@ -49,6 +49,7 @@ export class S3ManifestDiscoveryProvider
         autoDeleteObjects: true,
         enforceSSL: true,
         blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+        serverAccessLogsPrefix: 'access-logs/',
         encryption: s3.BucketEncryption.S3_MANAGED,
         // Keep manifests a week so an operator can replay recent triggers;
         // longer retention has no audit value.

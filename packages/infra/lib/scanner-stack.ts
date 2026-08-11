@@ -1,11 +1,11 @@
-import { CfnOutput, Duration, Stack, StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Duration, Stack, StackProps, Validations } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { Construct } from 'constructs';
+import { Construct, IConstruct } from 'constructs';
 import {
   InspectorScanner,
   IRepositoryAuth,
@@ -173,5 +173,105 @@ export class ScannerStack extends Stack {
     new CfnOutput(this, 'DiscoveryFunctionName', {
       value: this.discoveryFunction.functionName,
     });
+
+    acknowledgeNagFindings(this);
   }
+}
+
+/**
+ * Granular cdk-nag finding ids. Rules that report per-finding (IAM4/IAM5) are
+ * matched by the exact `RuleId[Finding]` string, so they must be acknowledged
+ * finding-by-finding — acknowledging `AwsSolutions-IAM5` alone has no effect.
+ */
+const IAM4_BASIC =
+  'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]';
+const IAM4_VPC =
+  'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole]';
+const IAM4_SIGNALS =
+  'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/CloudWatchLambdaApplicationSignalsExecutionRolePolicy]';
+const IAM5_ANY_RESOURCE = 'AwsSolutions-IAM5[Resource::*]';
+const IAM5_S3_READ = [
+  'AwsSolutions-IAM5[Action::s3:GetBucket*]',
+  'AwsSolutions-IAM5[Action::s3:GetObject*]',
+  'AwsSolutions-IAM5[Action::s3:List*]',
+];
+const IAM5_S3_WRITE = [
+  'AwsSolutions-IAM5[Action::s3:Abort*]',
+  'AwsSolutions-IAM5[Action::s3:DeleteObject*]',
+];
+
+function acknowledgeNagFindings(stack: Stack): void {
+  const REASON = {
+    execRole:
+      'CDK-default Lambda execution role. AWSLambda{Basic,VPCAccess}ExecutionRole and the Application Signals policy grant only CloudWatch Logs writes, VPC ENI management, and telemetry publication, all scoped by AWS. Least-privilege is applied to the function-specific inline policy.',
+    grantWildcards:
+      'Least-privilege grants use CDK-generated wildcards for object-level S3 (arn:.../<bucket>/*) and CloudWatch log streams (log-group:...:*). Amazon Inspector ScanSbom has no resource-level scoping and requires resource "*" per the API. Actions and resources are otherwise scoped to this stack.',
+    cdkManaged:
+      'CDK-framework-managed resource (custom-resource provider / log-retention / bucket-notifications handler). Its role and policy are generated and maintained by aws-cdk-lib, not by application code.',
+  };
+  const A = (path: string, ids: string[], reason: string) => {
+    const target = constructAt(stack, path);
+    for (const id of ids) acknowledgeFinding(target, id, reason);
+  };
+  const P = 'ScannerStack/Inspector';
+
+  for (const fn of ['ScannerLambda', 'DiscoverymanifestLambda', 'DiscoveryscheduledLambda']) {
+    A(`${P}/${fn}/ServiceRole/Resource`, [IAM4_BASIC, IAM4_VPC, IAM4_SIGNALS], REASON.execRole);
+    A(`${P}/${fn}/Resource`, ['AwsSolutions-L1'], REASON.execRole);
+  }
+
+  A(
+    `${P}/ScannerLambda/ServiceRole/DefaultPolicy/Resource`,
+    [IAM5_ANY_RESOURCE, ...IAM5_S3_READ, ...IAM5_S3_WRITE,
+     // Object-level grant on the findings bucket; embeds its generated logical id.
+     'AwsSolutions-IAM5[Resource::<InspectorFindingsBucket1AF26623.Arn>/*]'],
+    REASON.grantWildcards,
+  );
+  A(
+    `${P}/DiscoverymanifestLambda/ServiceRole/DefaultPolicy/Resource`,
+    [IAM5_ANY_RESOURCE, ...IAM5_S3_READ,
+     'AwsSolutions-IAM5[Resource::<ManifestBucket41E8D4D7.Arn>/*]'],
+    REASON.grantWildcards,
+  );
+  A(`${P}/DiscoveryscheduledLambda/ServiceRole/DefaultPolicy/Resource`, [IAM5_ANY_RESOURCE], REASON.grantWildcards);
+  A(
+    `${P}/NightlySchedulerRole/DefaultPolicy/Resource`,
+    ['AwsSolutions-IAM5[Resource::<InspectorDiscoveryscheduledLambdaA44F2FAE.Arn>:*]'],
+    REASON.grantWildcards,
+  );
+  A(`${P}/Observability/AppSignalsDiscovery/CustomResourcePolicy/Resource`, [IAM5_ANY_RESOURCE], REASON.cdkManaged);
+
+  A('ScannerStack/AWS679f53fac002430cb0da5b7982bd2287/ServiceRole/Resource', [IAM4_BASIC], REASON.cdkManaged);
+  A('ScannerStack/BucketNotificationsHandler050a0587b7544547bf325f094a3db834/Role/Resource', [IAM4_BASIC], REASON.cdkManaged);
+  A('ScannerStack/LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8a/ServiceRole/Resource', [IAM4_BASIC], REASON.cdkManaged);
+  A('ScannerStack/LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8a/ServiceRole/DefaultPolicy/Resource', [IAM5_ANY_RESOURCE], REASON.cdkManaged);
+}
+
+/**
+ * Record a cdk-nag acknowledgement on `target`.
+ *
+ * Writes the acknowledgement metadata directly instead of calling
+ * `Validations.acknowledge()`, because that method rejects any id containing
+ * more than one `::` — which every granular IAM4/IAM5 finding id does, since
+ * they embed ARNs (`Policy::arn:<AWS::Partition>:iam::aws:policy/...`). See
+ * cdklabs/cdk-nag#2351 and #2359. cdk-nag reads this same metadata key when
+ * deciding whether a finding is acknowledged, so the effect is identical for
+ * the ids `acknowledge()` does accept.
+ */
+function acknowledgeFinding(target: IConstruct, id: string, reason: string): void {
+  target.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
+    [id]: reason,
+  });
+}
+
+/**
+ * Resolve a construct from its stack-relative path (the form cdk-nag reports),
+ * so acknowledgements can be attached to CDK-managed resources we hold no
+ * reference to.
+ */
+function constructAt(stack: Stack, path: string): IConstruct {
+  return path
+    .split('/')
+    .slice(1)
+    .reduce<IConstruct>((node, id) => node.node.findChild(id), stack);
 }
