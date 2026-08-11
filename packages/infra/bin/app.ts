@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { App } from 'aws-cdk-lib';
+import { App, Validations } from 'aws-cdk-lib';
+import { AwsSolutionsChecks } from 'cdk-nag';
 import { BinaryStack } from '../lib/binary-stack';
 import { ScannerStack } from '../lib/scanner-stack';
 import { TestingStack } from '../lib/testing-stack';
@@ -39,5 +40,5 @@ new ScannerStack(app, 'ScannerStack', {
   mtlsSecret: testing.clientSecret,
 });
 
-// TODO: re-enable cdk-nag (AwsSolutionsChecks) once both stacks have the
-// expected suppressions. See docs/cdk-nag.md.
+// AWS Solutions checks run at synth; accepted findings are acknowledged per-stack.
+Validations.of(app).addPlugins(new AwsSolutionsChecks(app, { verbose: true }));

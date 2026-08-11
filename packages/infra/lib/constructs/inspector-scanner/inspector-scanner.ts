@@ -260,6 +260,7 @@ export class InspectorScanner extends Construct {
       removalPolicy: RemovalPolicy.RETAIN,
       enforceSSL: true,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      serverAccessLogsPrefix: 'access-logs/',
       encryption: props.findingsBucketKey
         ? s3.BucketEncryption.KMS
         : s3.BucketEncryption.S3_MANAGED,
