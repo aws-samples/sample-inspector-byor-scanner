@@ -79,7 +79,7 @@
     "@aws-sdk/client-secrets-manager": "^3.1117.0",
     "@peculiar/x509": "^2.0.0",
     "aws-cdk-lib": "^2.266.0",
-    "cdk-nag": "^3.0.1",
+    "cdk-nag": "^3.0.2",
     "constructs": "^10.8.1",
     "reflect-metadata": "^0.2.2"
   },
