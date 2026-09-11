@@ -15,7 +15,7 @@
     "@nx/eslint": "23.2.0",
     "@nx/eslint-plugin": "23.2.0",
     "@nx/js": "23.2.0",
-    "@nxlv/python": "^23.0.0",
+    "@nxlv/python": "^23.0.2",
     "@types/node": "^26.5.0",
     "eslint": "^10.9.1",
     "nx": "23.2.0",
