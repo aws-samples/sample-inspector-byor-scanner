@@ -22,7 +22,7 @@
     }
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1127.0",
+    "@aws-sdk/client-s3": "^3.1137.0",
     "@aws/synthetics-logger": "^16.0.0",
     "@aws/synthetics-puppeteer": "^16.0.0"
   },
