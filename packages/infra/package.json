@@ -84,7 +84,7 @@
     "reflect-metadata": "^0.2.2"
   },
   "devDependencies": {
-    "@types/aws-lambda": "^8.10.162",
+    "@types/aws-lambda": "^8.10.163",
     "@types/jest": "^30.0.0",
     "aws-cdk": "^2.1142.0",
     "jest": "^30.5.1",
