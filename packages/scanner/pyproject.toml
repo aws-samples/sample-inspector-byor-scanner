@@ -27,7 +27,7 @@ dependencies = [
     # Pinned to match the AWS Distro for OpenTelemetry (ADOT) Lambda layer.
     # Mismatched versions trigger a runtime warning. Bump together when
     # rotating the ADOT layer ARN in scanner-stack.ts.
-    "opentelemetry-api==1.40.0",
+    "opentelemetry-api==1.45.2",
 ]
 
 [tool.hatch.build.targets.wheel]
